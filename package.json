@@ -5,11 +5,37 @@
   "private": true,
   "type": "commonjs",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./data-structures": {
+      "types": "./dist/data-structures/index.d.ts",
+      "default": "./dist/data-structures/index.js"
+    },
+    "./rules": {
+      "types": "./dist/rules/index.d.ts",
+      "default": "./dist/rules/index.js"
+    },
+    "./ports": {
+      "types": "./dist/ports/index.d.ts",
+      "default": "./dist/ports/index.js"
+    }
+  },
   "scripts": {
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
-    "test:api": "npm run build && node --test dist/tests/lighttask.api.test.js",
-    "test:cli": "npm run build && node dist/cli/smoke.js demo",
-    "check": "npm run build && node --test dist/tests/lighttask.api.test.js && node dist/cli/smoke.js demo",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests",
+    "test:api": "npm run build && node --test dist/tests/lighttask.api.test.js dist/tests/data-structures.test.js",
+    "test:cli": "npm run build && node --test dist/tests/cli.test.js",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "arch:check": "node scripts/arch-check.mjs",
+    "lint": "biome lint src scripts",
+    "format": "biome format --write src scripts",
+    "format:check": "biome check --formatter-enabled=true --linter-enabled=false src scripts",
+    "quality": "npm run typecheck && npm run lint && npm run format:check && npm run arch:check",
+    "check": "npm run quality && npm run test",
     "dev:cli": "node ./node_modules/tsx/dist/cli.cjs src/cli/smoke.ts",
     "cli": "node dist/cli/smoke.js"
   },
@@ -17,8 +43,9 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "@types/node": "^20.17.30",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   }
 }

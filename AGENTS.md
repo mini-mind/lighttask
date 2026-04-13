@@ -20,6 +20,7 @@ LightTask 是通用人机协作编排内核，不是 uTools 应用仓库。`linp
 - 主 agent 负责拆解、调度 subagents、验收与收敛。
 - subagents 统一使用 `gpt-5.3-codex` 并行推进。
 - 禁止频繁催促 subagents。
+- 遇到决策歧义时，必须先整理完整上下文与备选方案，再向用户汇报并等待裁决。
 
 ## 流程
 
