@@ -1,0 +1,24 @@
+{
+  "name": "lighttask",
+  "version": "0.1.0",
+  "description": "LightTask 通用人机协作编排内核",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test:api": "npm run build && node --test dist/tests/lighttask.api.test.js",
+    "test:cli": "npm run build && node dist/cli/smoke.js demo",
+    "check": "npm run build && node --test dist/tests/lighttask.api.test.js && node dist/cli/smoke.js demo",
+    "dev:cli": "node ./node_modules/tsx/dist/cli.cjs src/cli/smoke.ts",
+    "cli": "node dist/cli/smoke.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.30",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

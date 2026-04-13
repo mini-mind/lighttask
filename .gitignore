@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+release/
+coverage/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+
+# Cache
+.cache/
+.eslintcache
+.parcel-cache/
+.tmp/
+tmp/
+
+# Test artifacts
+.nyc_output/
+test-results/
+playwright-report/
+
+# IDE / OS
+.vscode/
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# uTools packaging artifacts
+*.upx
+*.ctpx
+*.tgz
