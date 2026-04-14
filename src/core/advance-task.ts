@@ -10,16 +10,31 @@ import { applyTaskStepProgress } from "./task-progress";
 import { buildAdvanceFingerprint, clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type { AdvanceTaskInput, CreateLightTaskOptions, LightTaskTask } from "./types";
 
+function assertTaskId(taskId: string): string {
+  const normalizedTaskId = taskId.trim();
+
+  if (!normalizedTaskId) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", {
+        taskId,
+      }),
+    );
+  }
+
+  return normalizedTaskId;
+}
+
 export function advanceTaskUseCase(
   options: CreateLightTaskOptions,
   taskId: string,
   input: AdvanceTaskInput,
 ): LightTaskTask {
-  const storedTask = options.taskRepository.get(taskId);
+  const normalizedTaskId = assertTaskId(taskId);
+  const storedTask = options.taskRepository.get(normalizedTaskId);
   if (!storedTask) {
     throwLightTaskError(
       createLightTaskError("NOT_FOUND", "未找到任务", {
-        taskId,
+        taskId: normalizedTaskId,
       }),
     );
   }
@@ -28,7 +43,7 @@ export function advanceTaskUseCase(
   if (input.expectedRevision === undefined) {
     throwLightTaskError(
       createLightTaskError("VALIDATION_ERROR", "expectedRevision 为必填字段", {
-        taskId,
+        taskId: normalizedTaskId,
       }),
     );
   }
@@ -37,7 +52,7 @@ export function advanceTaskUseCase(
   if (!action) {
     throwLightTaskError(
       createLightTaskError("STATE_CONFLICT", "任务没有可推进的进行中阶段", {
-        taskId,
+        taskId: normalizedTaskId,
         currentStatus: task.status,
       }),
     );
@@ -56,7 +71,7 @@ export function advanceTaskUseCase(
     throwLightTaskError(
       idempotencyDecision.error ??
         createLightTaskError("STATE_CONFLICT", idempotencyDecision.reason, {
-          taskId,
+          taskId: normalizedTaskId,
         }),
     );
   }

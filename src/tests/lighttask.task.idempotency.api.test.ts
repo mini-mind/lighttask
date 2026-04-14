@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PersistedLightTask } from "../core/types";
-import { createLightTask } from "../index";
+import { LightTaskError, createLightTask } from "../index";
 import type { TaskRepository } from "../ports";
 import { createTestLightTaskOptions } from "./ports-fixture";
 
@@ -22,7 +22,11 @@ test("LightTask 公共 API 在同幂等键重复推进时会拒绝语义不一�
         expectedRevision: 2,
         idempotencyKey: "req_1",
       }),
-    /STATE_CONFLICT/,
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "STATE_CONFLICT");
+      return true;
+    },
   );
 });
 

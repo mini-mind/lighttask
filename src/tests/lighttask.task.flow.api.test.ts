@@ -31,7 +31,7 @@ test("LightTask 公共 API 在不存在任务时推进会抛错", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   assert.throws(
     () =>
-      lighttask.advanceTask("task_missing", {
+      lighttask.advanceTask("  task_missing  ", {
         expectedRevision: 1,
       }),
     (error) => {
@@ -59,11 +59,42 @@ test("LightTask 公共 API 查询时会标准化 taskId", () => {
   assert.equal(stored.id, task.id);
 });
 
+test("LightTask 公共 API 推进时会标准化 taskId", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  const task = lighttask.createTask({
+    title: "task 推进标准化",
+  });
+
+  const advanced = lighttask.advanceTask(`  ${task.id}  `, {
+    expectedRevision: 1,
+  });
+  assert.equal(advanced.id, task.id);
+  assert.equal(advanced.status, "dispatched");
+});
+
 test("LightTask 公共 API 查询空白 taskId 时会抛校验错误", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
   assert.throws(
     () => lighttask.getTask("   "),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      assert.equal(error.coreError.message, "任务 ID 不能为空");
+      assert.equal(error.details?.taskId, "   ");
+      return true;
+    },
+  );
+});
+
+test("LightTask 公共 API 推进空白 taskId 时会抛校验错误", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  assert.throws(
+    () =>
+      lighttask.advanceTask("   ", {
+        expectedRevision: 1,
+      }),
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "VALIDATION_ERROR");

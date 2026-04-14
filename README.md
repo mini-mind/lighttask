@@ -46,7 +46,7 @@ lighttask/
 - `createLightTask`：必须显式注入 `taskRepository`、`planRepository`、`graphRepository`、`clock`、`idGenerator`。
 - `planRepository`（core 边界）：当前 `createPlan/getPlan/getGraph/saveGraph` 仅要求 `get/create`；`list/saveIfRevisionMatches` 仍保留在 `ports` 完整契约中，供后续计划用例扩展。
 - `createTask`：`title.trim()` 后必须非空。
-- `getTask`：`taskId.trim()` 后必须非空。
+- `getTask` / `advanceTask`：`taskId.trim()` 后必须非空。
 - `createPlan`：`input.id.trim()` 后必须非空。
 - `getPlan` / `getGraph` / `saveGraph`：`planId.trim()` 后必须非空。
 - `getGraph` / `saveGraph`：`planId.trim()` 后必须非空，且计划必须存在；当计划不存在时优先返回 `NOT_FOUND`，不进入图规则校验。
