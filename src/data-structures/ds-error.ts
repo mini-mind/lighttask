@@ -1,11 +1,14 @@
 import { cloneOptional } from "./ds-clone";
 
-export type CoreErrorCode =
-  | "VALIDATION_ERROR"
-  | "STATE_CONFLICT"
-  | "REVISION_CONFLICT"
-  | "NOT_FOUND"
-  | "INVARIANT_VIOLATION";
+export const CORE_ERROR_CODES = [
+  "VALIDATION_ERROR",
+  "STATE_CONFLICT",
+  "REVISION_CONFLICT",
+  "NOT_FOUND",
+  "INVARIANT_VIOLATION",
+] as const;
+
+export type CoreErrorCode = (typeof CORE_ERROR_CODES)[number];
 
 export interface CoreError {
   code: CoreErrorCode;
@@ -13,7 +16,7 @@ export interface CoreError {
   details?: Record<string, unknown>;
 }
 
-export class CoreContractError extends Error {
+export class LightTaskError extends Error {
   readonly code: CoreErrorCode;
   readonly details?: Record<string, unknown>;
   readonly coreError: CoreError;
@@ -40,5 +43,5 @@ export function createCoreError(
 }
 
 export function throwCoreError(coreError: CoreError): never {
-  throw new CoreContractError(coreError);
+  throw new LightTaskError(coreError);
 }

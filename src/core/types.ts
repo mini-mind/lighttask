@@ -1,4 +1,11 @@
-import type { ClockPort, IdGeneratorPort, TaskRepository } from "../ports";
+import type { GraphEdgeRecord, GraphNodeRecord, PlanLifecycleStatus } from "../data-structures";
+import type {
+  ClockPort,
+  GraphRepository,
+  IdGeneratorPort,
+  PlanRepositoryWriteResult,
+  TaskRepository,
+} from "../ports";
 import type { TaskLifecycleStatus } from "../rules";
 import type { TaskAction } from "../rules";
 
@@ -24,13 +31,43 @@ export interface LightTaskTask {
   steps: LightTaskStep[];
 }
 
+export interface LightTaskPlan {
+  id: string;
+  title: string;
+  status: PlanLifecycleStatus;
+  revision: number;
+  idempotencyKey?: string;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LightTaskGraph {
+  nodes: GraphNodeRecord[];
+  edges: GraphEdgeRecord[];
+  revision: number;
+  idempotencyKey?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PersistedLightTask extends LightTaskTask {
   lastAdvanceFingerprint?: string;
 }
 
+export interface PersistedLightPlan extends LightTaskPlan {}
+
+export interface PersistedLightGraph extends LightTaskGraph {}
+
 export interface CreateTaskInput {
   title: string;
   summary?: string;
+}
+
+export interface CreatePlanInput {
+  id: string;
+  title: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AdvanceTaskInput {
@@ -39,10 +76,28 @@ export interface AdvanceTaskInput {
   idempotencyKey?: string;
 }
 
+export interface SaveGraphInput {
+  nodes: GraphNodeRecord[];
+  edges: GraphEdgeRecord[];
+  expectedRevision?: number;
+  idempotencyKey?: string;
+}
+
+/**
+ * core 当前已落地的计划编排只依赖 get/create 两个能力。
+ * list/saveIfRevisionMatches 仍属于 ports 层完整契约，供后续 use case 复用。
+ */
+export interface CorePlanCreateGetRepository<TPlan extends { id: string; revision: number }> {
+  get(planId: string): TPlan | undefined;
+  create(plan: TPlan): PlanRepositoryWriteResult<TPlan>;
+}
+
 export interface CreateLightTaskOptions {
-  taskRepository?: TaskRepository<PersistedLightTask>;
-  clock?: ClockPort;
-  idGenerator?: IdGeneratorPort;
+  taskRepository: TaskRepository<PersistedLightTask>;
+  planRepository: CorePlanCreateGetRepository<PersistedLightPlan>;
+  graphRepository: GraphRepository<PersistedLightGraph>;
+  clock: ClockPort;
+  idGenerator: IdGeneratorPort;
 }
 
 export interface LightTaskKernel {
@@ -50,4 +105,8 @@ export interface LightTaskKernel {
   listTasks(): LightTaskTask[];
   getTask(taskId: string): LightTaskTask | undefined;
   advanceTask(taskId: string, input: AdvanceTaskInput): LightTaskTask;
+  createPlan(input: CreatePlanInput): LightTaskPlan;
+  getPlan(planId: string): LightTaskPlan | undefined;
+  getGraph(planId: string): LightTaskGraph | undefined;
+  saveGraph(planId: string, input: SaveGraphInput): LightTaskGraph;
 }

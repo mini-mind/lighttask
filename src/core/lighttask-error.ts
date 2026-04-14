@@ -1,35 +1,32 @@
-export type LightTaskErrorCode =
-  | "VALIDATION_ERROR"
-  | "STATE_CONFLICT"
-  | "REVISION_CONFLICT"
-  | "NOT_FOUND"
-  | "INVARIANT_VIOLATION";
+import type { CoreError, CoreErrorCode } from "../data-structures";
+import { CORE_ERROR_CODES, LightTaskError, createCoreError } from "../data-structures";
 
-export interface LightTaskErrorShape {
-  code: LightTaskErrorCode;
-  message: string;
-  details?: Record<string, unknown>;
-}
+export type LightTaskErrorCode = CoreErrorCode;
+export type LightTaskErrorShape = CoreError;
+export { LightTaskError };
 
 export function createLightTaskError(
   code: LightTaskErrorCode,
   message: string,
   details?: Record<string, unknown>,
 ): LightTaskErrorShape {
-  return {
-    code,
-    message,
-    details,
-  };
+  // 错误模型以 data-structures 为唯一来源，core 只负责异常适配，不再维护第二套 shape。
+  return createCoreError(code, message, details);
 }
 
-function isCoreError(value: unknown): value is LightTaskErrorShape {
+const CORE_ERROR_CODE_SET = new Set<string>(CORE_ERROR_CODES);
+
+function isLightTaskErrorShape(value: unknown): value is LightTaskErrorShape {
   if (typeof value !== "object" || value === null) {
     return false;
   }
 
   const candidate = value as Partial<LightTaskErrorShape>;
-  return typeof candidate.code === "string" && typeof candidate.message === "string";
+  return (
+    typeof candidate.code === "string" &&
+    CORE_ERROR_CODE_SET.has(candidate.code) &&
+    typeof candidate.message === "string"
+  );
 }
 
 function hasCoreError(value: unknown): value is { coreError: LightTaskErrorShape } {
@@ -38,25 +35,14 @@ function hasCoreError(value: unknown): value is { coreError: LightTaskErrorShape
   }
 
   const candidate = value as { coreError?: unknown };
-  return isCoreError(candidate.coreError);
+  return isLightTaskErrorShape(candidate.coreError);
 }
 
 function hasErrorShape(value: unknown): value is LightTaskErrorShape {
-  return isCoreError(value);
-}
-
-export class LightTaskError extends Error {
-  readonly code: LightTaskErrorCode;
-  readonly details?: Record<string, unknown>;
-  readonly coreError: LightTaskErrorShape;
-
-  constructor(coreError: LightTaskErrorShape) {
-    super(`${coreError.code}: ${coreError.message}`);
-    this.name = "LightTaskError";
-    this.code = coreError.code;
-    this.details = coreError.details;
-    this.coreError = coreError;
+  if (value instanceof Error) {
+    return false;
   }
+  return isLightTaskErrorShape(value);
 }
 
 export function throwLightTaskError(coreError: LightTaskErrorShape): never {
@@ -77,6 +63,7 @@ export function toLightTaskError(error: unknown): LightTaskError {
   }
 
   if (error instanceof Error) {
+    // 进入这里说明异常不属于内核契约错误，统一降级为 INVARIANT_VIOLATION，避免原生异常泄漏到上层。
     return new LightTaskError(
       createLightTaskError("INVARIANT_VIOLATION", error.message, {
         originalErrorName: error.name,
@@ -84,6 +71,7 @@ export function toLightTaskError(error: unknown): LightTaskError {
     );
   }
 
+  // 兜底处理非 Error 异常值，保证公共 API 的异常面保持统一。
   return new LightTaskError(
     createLightTaskError("INVARIANT_VIOLATION", "捕获到非 Error 异常", {
       originalError: String(error),

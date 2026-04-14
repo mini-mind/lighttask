@@ -3,42 +3,42 @@
 ## 分层定义
 
 ```text
-[应用层 Application]
-    |
-    v
-[编排层 Orchestration]
-   / \
-  v   v
-[规则层 Rule Domain]    [端口层 Port Domain]
-        \              /
-         v            v
-      [数据结构层 Data Structure]
-```
-
-```text
-外部系统（DB/WS/Daemon/Provider） <--- 端口实现（Adapters，实现 Port Domain 接口）
+[上层应用 / uTools / 服务]
+          |
+          v
+[L3 内核编排层 core]
+      /           \
+     v             v
+[L1 规则层 rules] [L2 端口层 ports]
+          \        /
+           v      v
+      [L0 数据结构层 data-structures]
 ```
 
 ## 职责
 
-1. 数据结构层：实体、值对象、状态枚举、事件结构、错误结构、版本字段。
-2. 规则层：Task/Plan 状态机、DAG 校验与拓扑、幂等与 revision 规则。
-3. 端口层：Repository、Clock、IdGenerator 等接口。
-4. 编排层：`enqueue/claim/start/complete/fail/approve/cancel` 用例流程，只消费规则与端口，不直接混入适配器实现。
-5. 应用层：API/Façade 暴露与装配，DTO 映射、权限入口、协议组装，步骤展示文案也在这一层收口。
+1. `data-structures`：实体、状态、事件、错误、revision 等基础结构。
+2. `rules`：状态机、DAG、幂等、revision 校验等纯规则。
+3. `ports`：仓储、时钟、ID 生成器等端口契约；仓库内允许放仅供 CLI/测试复用的极简本地实现。
+4. `core`：`createTask / getTask / listTasks / advanceTask / createPlan / getPlan / getGraph / saveGraph` 编排入口，只组合规则与端口，不承载应用层策略；其中计划编排当前只依赖 `planRepository.get/create`。
+5. 上层应用：`linpo`、`TopoFlow`、未来 uTools 应用，位于本仓库之外。
 
 ## 硬约束
 
-1. 规则层禁止 import 端口层。
-2. 端口层禁止 import 规则层。
-3. 编排层是唯一同时依赖规则层与端口层的层。
-4. 编排层允许依赖端口接口，不允许直接依赖端口实现。
-5. 适配器只能实现端口接口，不能写领域规则。
-6. 错误契约统一为 `LightTaskError` 风格：`code`、`message`、`details` 可稳定判别。
+1. `rules` 禁止依赖 `ports`。
+2. `ports` 禁止依赖 `rules`。
+3. `core` 是唯一同时依赖 `rules` 与 `ports` 的层。
+4. 公共错误面统一为 `LightTaskError`：`code`、`message`、`details`。
+5. 当前仓库不实现应用层 API、DB/Runtime 适配器、实时通道或 uTools 壳。
 
-## 模块批次清单（共 5 批）
+## 稳定入口与实现隔离
 
-### 第 1 批（首批）：数据结构层
+1. `core` 依赖 `ports` 时，只能走稳定入口（`ports/index` 或 `port-*` 契约文件），禁止耦合 `ports/in-memory` 等实现文件。
+2. `core` 与 `ports` 都禁止深层导入 `data-structures/ds-*` 叶子模块，应改走 `data-structures` 稳定入口或各层私有封装。
+
+## 模块批次清单
+
+### 第 1 批：数据结构层
 1. `ds-task`
 2. `ds-plan`
 3. `ds-graph`
@@ -55,27 +55,28 @@
 5. `rule-revision`
 
 ### 第 3 批：端口层
-1. 已落地：`port-task-repo`
-2. 已落地：`port-system`
-3. 预留：`port-plan-repo`
-4. 预留：`port-graph-repo`
+1. 已落地：`port-task-repo`（任务记录 `list/get/create/saveIfRevisionMatches`）
+2. 已落地：`port-system`（`clock` / `idGenerator`）
+3. 已落地：`port-plan-repo`（计划记录 `list/get/create/saveIfRevisionMatches`；其中 `core` 当前仅消费 `get/create`，`list/saveIfRevisionMatches` 作为完整契约与后续能力预留）
+4. 已落地：`port-graph-repo`（按 `planId` 读写图快照 `get/create/saveIfRevisionMatches`）
 5. 预留：`port-runtime`
 6. 预留：`port-policy`
 7. 预留：`port-notify`
 8. 预留：`port-telemetry`
 
 ### 第 4 批：编排层（TDD）
-1. `uc-enqueue-claim-start-complete`
-2. `uc-fail-cancel-timeout`
-3. `uc-approval-gate`
-4. `uc-dag-ready-check`
-5. `uc-idempotent-replay`
+1. 已落地：`uc-create-task`
+2. 已落地：`uc-get-task`
+3. 已落地：`uc-list-tasks`
+4. 已落地：`uc-advance-task`
+5. 已落地：`uc-create-plan`
+6. 已落地：`uc-get-plan`
+7. 已落地：`uc-get-graph`
+8. 已落地：`uc-save-graph`
+9. 预留：`uc-advance-plan`
+10. 预留：`uc-idempotent-replay`
 
-### 第 5 批：应用层
-1. `api-command`
-2. `api-query`
-3. `api-subscribe`
-4. `adapter-db`
-5. `adapter-runtime`
-6. `adapter-realtime`
-7. `adapter-provider`
+### 第 5 批：上层应用预留（不在本仓库实现）
+1. `linpo` 应用封装
+2. `TopoFlow` 应用封装
+3. uTools 应用壳与平台适配

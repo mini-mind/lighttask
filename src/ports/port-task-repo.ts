@@ -1,14 +1,6 @@
-import type { CoreError } from "../data-structures";
+import type { RepositoryWriteResult } from "./port-repo-write-result";
 
-export type TaskRepositoryWriteResult<TTask> =
-  | {
-      ok: true;
-      task: TTask;
-    }
-  | {
-      ok: false;
-      error: CoreError;
-    };
+export type TaskRepositoryWriteResult<TTask> = RepositoryWriteResult<"task", TTask>;
 
 export interface TaskRepository<TTask extends { id: string; revision: number }> {
   list(): TTask[];

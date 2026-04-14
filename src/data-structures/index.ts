@@ -8,7 +8,12 @@ export {
 } from "./ds-status";
 
 export type { CoreErrorCode, CoreError } from "./ds-error";
-export { CoreContractError, createCoreError, throwCoreError } from "./ds-error";
+export {
+  CORE_ERROR_CODES,
+  LightTaskError,
+  createCoreError,
+  throwCoreError,
+} from "./ds-error";
 
 export type { RevisionState } from "./ds-revision";
 export {

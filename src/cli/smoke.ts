@@ -1,4 +1,13 @@
+import { createLightTaskError } from "../core/lighttask-error";
+import type { PersistedLightTask } from "../core/types";
 import { LightTaskError, createLightTask } from "../index";
+import {
+  createInMemoryGraphRepository,
+  createInMemoryPlanRepository,
+  createInMemoryTaskRepository,
+  createSystemClock,
+  createTaskIdGenerator,
+} from "../ports/in-memory";
 
 function printHelp(): void {
   console.log("LightTask CLI");
@@ -9,7 +18,13 @@ function printHelp(): void {
 
 function run(): void {
   const [, , command, ...rest] = process.argv;
-  const lighttask = createLightTask();
+  const lighttask = createLightTask({
+    taskRepository: createInMemoryTaskRepository<PersistedLightTask>(),
+    planRepository: createInMemoryPlanRepository(),
+    graphRepository: createInMemoryGraphRepository(),
+    clock: createSystemClock(),
+    idGenerator: createTaskIdGenerator(),
+  });
 
   if (!command || command === "help") {
     printHelp();
@@ -31,20 +46,14 @@ function run(): void {
   if (command === "create") {
     const title = rest.join(" ").trim();
     if (!title) {
-      throw new LightTaskError({
-        code: "VALIDATION_ERROR",
-        message: "create 命令需要任务标题",
-      });
+      throw new LightTaskError(createLightTaskError("VALIDATION_ERROR", "create 命令需要任务标题"));
     }
 
     console.log(JSON.stringify(lighttask.createTask({ title }), null, 2));
     return;
   }
 
-  throw new LightTaskError({
-    code: "VALIDATION_ERROR",
-    message: `未知命令: ${command}`,
-  });
+  throw new LightTaskError(createLightTaskError("VALIDATION_ERROR", `未知命令: ${command}`));
 }
 
 try {
