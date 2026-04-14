@@ -16,6 +16,7 @@ export {
   getNextPlanStatus,
   transitionPlanStatus,
   listPlanActions,
+  selectDefaultPlanAction,
 } from "./rule-plan-fsm";
 
 export type { DagValidationResult, NormalizedDagEdge } from "./rule-graph";

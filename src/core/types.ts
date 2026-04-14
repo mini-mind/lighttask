@@ -3,11 +3,10 @@ import type {
   ClockPort,
   GraphRepository,
   IdGeneratorPort,
-  PlanRepositoryWriteResult,
+  PlanRepository,
   TaskRepository,
 } from "../ports";
-import type { TaskLifecycleStatus } from "../rules";
-import type { TaskAction } from "../rules";
+import type { PlanAction, TaskAction, TaskLifecycleStatus } from "../rules";
 
 export type TaskStage = "investigate" | "design" | "implement" | "verify" | "converge";
 
@@ -76,20 +75,16 @@ export interface AdvanceTaskInput {
   idempotencyKey?: string;
 }
 
+export interface AdvancePlanInput {
+  action?: PlanAction;
+  expectedRevision: number;
+}
+
 export interface SaveGraphInput {
   nodes: GraphNodeRecord[];
   edges: GraphEdgeRecord[];
   expectedRevision?: number;
   idempotencyKey?: string;
-}
-
-/**
- * core 当前已落地的计划编排只依赖 get/create 两个能力。
- * list/saveIfRevisionMatches 仍属于 ports 层完整契约，供后续 use case 复用。
- */
-export interface CorePlanCreateGetRepository<TPlan extends { id: string; revision: number }> {
-  get(planId: string): TPlan | undefined;
-  create(plan: TPlan): PlanRepositoryWriteResult<TPlan>;
 }
 
 type LazyValidatedPort<TPort> = {
@@ -98,7 +93,7 @@ type LazyValidatedPort<TPort> = {
 
 export interface CreateLightTaskOptions {
   taskRepository: LazyValidatedPort<TaskRepository<PersistedLightTask>>;
-  planRepository: LazyValidatedPort<CorePlanCreateGetRepository<PersistedLightPlan>>;
+  planRepository: LazyValidatedPort<PlanRepository<PersistedLightPlan>>;
   graphRepository: LazyValidatedPort<GraphRepository<PersistedLightGraph>>;
   clock: LazyValidatedPort<ClockPort>;
   idGenerator: LazyValidatedPort<IdGeneratorPort>;
@@ -111,6 +106,7 @@ export interface LightTaskKernel {
   advanceTask(taskId: string, input: AdvanceTaskInput): LightTaskTask;
   createPlan(input: CreatePlanInput): LightTaskPlan;
   getPlan(planId: string): LightTaskPlan | undefined;
+  advancePlan(planId: string, input: AdvancePlanInput): LightTaskPlan;
   getGraph(planId: string): LightTaskGraph | undefined;
   saveGraph(planId: string, input: SaveGraphInput): LightTaskGraph;
 }

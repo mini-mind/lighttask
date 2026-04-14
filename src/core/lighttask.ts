@@ -1,3 +1,4 @@
+import { advancePlanUseCase } from "./advance-plan";
 import { advanceTaskUseCase } from "./advance-task";
 import { createPlanUseCase } from "./create-plan";
 import { createTaskUseCase } from "./create-task";
@@ -8,6 +9,7 @@ import { toLightTaskError } from "./lighttask-error";
 import { listTasksUseCase } from "./list-tasks";
 import { saveGraphUseCase } from "./save-graph";
 import type {
+  AdvancePlanInput,
   AdvanceTaskInput,
   CreateLightTaskOptions,
   CreatePlanInput,
@@ -47,6 +49,10 @@ class LightTaskKernelFacade implements LightTaskKernel {
 
   getPlan(planId: string): LightTaskPlan | undefined {
     return this.runWithErrorBoundary(() => getPlanUseCase(this.options, planId));
+  }
+
+  advancePlan(planId: string, input: AdvancePlanInput): LightTaskPlan {
+    return this.runWithErrorBoundary(() => advancePlanUseCase(this.options, planId, input));
   }
 
   getGraph(planId: string): LightTaskGraph | undefined {

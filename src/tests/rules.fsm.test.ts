@@ -11,6 +11,7 @@ import {
   listPlanActions,
   listTaskActions,
   resolveTaskStepProgress,
+  selectDefaultPlanAction,
   selectDefaultTaskAction,
   transitionPlanStatus,
   transitionTaskStatus,
@@ -205,6 +206,13 @@ test("规则层 FSM：默认动作选择遵循规则层优先级", () => {
   assert.equal(selectDefaultTaskAction("running"), "complete");
   assert.equal(selectDefaultTaskAction("blocked_by_approval"), "approve");
   assert.equal(selectDefaultTaskAction("completed"), undefined);
+
+  assert.equal(selectDefaultPlanAction("draft"), "start_planning");
+  assert.equal(selectDefaultPlanAction("planning"), "mark_ready");
+  assert.equal(selectDefaultPlanAction("ready"), "confirm");
+  assert.equal(selectDefaultPlanAction("confirmed"), "archive");
+  assert.equal(selectDefaultPlanAction("archived"), undefined);
+  assert.equal(selectDefaultPlanAction("failed"), undefined);
 });
 
 test("规则层 FSM：步骤推进策略由规则层统一给出", () => {

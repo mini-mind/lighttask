@@ -97,3 +97,16 @@ export function listPlanActions(currentStatus: PlanLifecycleStatus): PlanAction[
   // 统一从动作全集过滤，保证动作枚举顺序稳定且和迁移判定一致。
   return PLAN_ACTIONS.filter((action) => canPlanTransition(currentStatus, action));
 }
+
+const DEFAULT_PLAN_ACTION_PRIORITY: readonly PlanAction[] = [
+  "start_planning",
+  "mark_ready",
+  "confirm",
+  "archive",
+];
+
+export function selectDefaultPlanAction(
+  currentStatus: PlanLifecycleStatus,
+): PlanAction | undefined {
+  return DEFAULT_PLAN_ACTION_PRIORITY.find((action) => canPlanTransition(currentStatus, action));
+}
