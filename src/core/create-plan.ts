@@ -1,5 +1,9 @@
 import { createPlanSessionRecord } from "../data-structures";
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import {
+  createLightTaskError,
+  requireLightTaskFunction,
+  throwLightTaskError,
+} from "./lighttask-error";
 import { toPublicPlan } from "./plan-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -12,6 +16,11 @@ export function createPlanUseCase(
   options: CreateLightTaskOptions,
   input: CreatePlanInput,
 ): LightTaskPlan {
+  const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const createPlan = requireLightTaskFunction(
+    options.planRepository?.create,
+    "planRepository.create",
+  );
   const planId = input.id.trim();
   const title = input.title.trim();
 
@@ -34,10 +43,10 @@ export function createPlanUseCase(
   const plan: PersistedLightPlan = createPlanSessionRecord({
     id: planId,
     title,
-    createdAt: options.clock.now(),
+    createdAt: clockNow(),
     metadata: input.metadata,
   });
-  const created = options.planRepository.create(plan);
+  const created = createPlan(plan);
 
   if (!created.ok) {
     throwLightTaskError(created.error);

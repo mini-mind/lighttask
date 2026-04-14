@@ -49,6 +49,21 @@ export function throwLightTaskError(coreError: LightTaskErrorShape): never {
   throw new LightTaskError(coreError);
 }
 
+export function requireLightTaskFunction<TValue>(
+  value: TValue | undefined,
+  path: string,
+): Exclude<TValue, undefined> {
+  if (typeof value === "function") {
+    return value as Exclude<TValue, undefined>;
+  }
+
+  throwLightTaskError(
+    createLightTaskError("VALIDATION_ERROR", `${path} 必须是函数`, {
+      path,
+    }),
+  );
+}
+
 export function toLightTaskError(error: unknown): LightTaskError {
   if (error instanceof LightTaskError) {
     return error;

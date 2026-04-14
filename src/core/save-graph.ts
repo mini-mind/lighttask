@@ -2,7 +2,11 @@ import { bumpRevision, createGraphSnapshot } from "../data-structures";
 import { assertExpectedRevision, assertNextRevision, validateDagSnapshot } from "../rules";
 import { cloneValue } from "./clone";
 import { toPublicGraph } from "./graph-snapshot";
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import {
+  createLightTaskError,
+  requireLightTaskFunction,
+  throwLightTaskError,
+} from "./lighttask-error";
 import type {
   CreateLightTaskOptions,
   LightTaskGraph,
@@ -45,8 +49,10 @@ export function saveGraphUseCase(
   planId: string,
   input: SaveGraphInput,
 ): LightTaskGraph {
+  const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
+  const getGraph = requireLightTaskFunction(options.graphRepository?.get, "graphRepository.get");
   const normalizedPlanId = assertPlanId(planId);
-  const plan = options.planRepository.get(normalizedPlanId);
+  const plan = getPlan(normalizedPlanId);
   if (!plan) {
     throwLightTaskError(
       createLightTaskError("NOT_FOUND", "未找到计划，无法保存图快照", {
@@ -56,10 +62,15 @@ export function saveGraphUseCase(
   }
   assertGraphInput(normalizedPlanId, input);
 
-  const storedGraph = options.graphRepository.get(normalizedPlanId);
+  const storedGraph = getGraph(normalizedPlanId);
   const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
 
   if (!storedGraph) {
+    const createGraph = requireLightTaskFunction(
+      options.graphRepository?.create,
+      "graphRepository.create",
+    );
+    const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
     if (input.expectedRevision !== undefined) {
       throwLightTaskError(
         createLightTaskError("VALIDATION_ERROR", "首次保存图快照时不应传 expectedRevision", {
@@ -69,12 +80,12 @@ export function saveGraphUseCase(
       );
     }
 
-    const created = options.graphRepository.create(
+    const created = createGraph(
       normalizedPlanId,
       createGraphSnapshot({
         nodes: input.nodes,
         edges: input.edges,
-        createdAt: options.clock.now(),
+        createdAt: clockNow(),
         idempotencyKey: normalizedIdempotencyKey,
       }),
     );
@@ -97,7 +108,12 @@ export function saveGraphUseCase(
   assertExpectedRevision(storedGraph.revision, input.expectedRevision);
   assertNextRevision(storedGraph.revision, storedGraph.revision + 1);
 
-  const nextRevision = bumpRevision(storedGraph, options.clock.now(), normalizedIdempotencyKey);
+  const saveIfRevisionMatches = requireLightTaskFunction(
+    options.graphRepository?.saveIfRevisionMatches,
+    "graphRepository.saveIfRevisionMatches",
+  );
+  const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const nextRevision = bumpRevision(storedGraph, clockNow(), normalizedIdempotencyKey);
   const nextGraph: PersistedLightGraph = {
     nodes: cloneValue(input.nodes),
     edges: cloneValue(input.edges),
@@ -106,11 +122,7 @@ export function saveGraphUseCase(
     revision: nextRevision.revision,
     idempotencyKey: nextRevision.idempotencyKey,
   };
-  const saved = options.graphRepository.saveIfRevisionMatches(
-    normalizedPlanId,
-    nextGraph,
-    storedGraph.revision,
-  );
+  const saved = saveIfRevisionMatches(normalizedPlanId, nextGraph, storedGraph.revision);
 
   if (!saved.ok) {
     throwLightTaskError(saved.error);

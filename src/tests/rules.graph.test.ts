@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isDeepStrictEqual } from "node:util";
+import type { CoreError, CoreErrorCode } from "../data-structures/ds-error";
+import { LightTaskError } from "../data-structures/ds-error";
 import { createGraphSnapshot } from "../data-structures/ds-graph";
 import type { GraphEdgeRecord } from "../data-structures/ds-graph";
 import {
@@ -12,6 +15,44 @@ import {
 } from "../rules";
 
 const NOW = "2026-04-13T00:00:00.000Z";
+
+function expectLightTaskError(
+  action: () => void,
+  expected: {
+    code: CoreErrorCode;
+    message?: string;
+    details?: Record<string, unknown>;
+  },
+): void {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof LightTaskError);
+    assert.equal(error.code, expected.code);
+
+    if (expected.message !== undefined) {
+      assert.equal(error.coreError.message, expected.message);
+    }
+
+    if (expected.details !== undefined) {
+      assert.deepEqual(error.coreError.details, expected.details);
+    }
+
+    return true;
+  });
+}
+
+function expectContainsValidationError(
+  errors: CoreError[],
+  expectedDetails: Record<string, unknown>,
+): void {
+  const keys = Object.keys(expectedDetails);
+  assert.ok(
+    errors.some(
+      (error) =>
+        error.code === "VALIDATION_ERROR" &&
+        keys.every((key) => isDeepStrictEqual(error.details?.[key], expectedDetails[key])),
+    ),
+  );
+}
 
 function createSnapshot(nodeIds: string[], edges: GraphEdgeRecord[]) {
   return createGraphSnapshot({
@@ -50,8 +91,16 @@ test("规则层 DAG：重复节点可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.equal(validation.errors[0]?.code, "VALIDATION_ERROR");
-  assert.match(validation.errors[0]?.message ?? "", /重复节点/);
+  assert.deepEqual(validation.errors, [
+    {
+      code: "VALIDATION_ERROR",
+      message: "检测到重复节点 id",
+      details: {
+        nodeId: "n1",
+        nodeIndex: 1,
+      },
+    },
+  ]);
 });
 
 test("规则层 DAG：重复边可识别", () => {
@@ -65,7 +114,10 @@ test("规则层 DAG：重复边可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /重复 DAG 依赖关系/.test(error.message)));
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e2",
+    normalizedKey: "n1->n2",
+  });
 });
 
 test("规则层 DAG：重复边 id 可识别", () => {
@@ -79,7 +131,10 @@ test("规则层 DAG：重复边 id 可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /重复边 id/.test(error.message)));
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e1",
+    edgeIndex: 1,
+  });
 });
 
 test("规则层 DAG：同 kind/from/to 的重复边关系可识别", () => {
@@ -93,7 +148,11 @@ test("规则层 DAG：同 kind/from/to 的重复边关系可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /重复边关系/.test(error.message)));
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e2",
+    edgeIndex: 1,
+    edgeKey: "depends_on:n2->n1",
+  });
 });
 
 test("规则层 DAG：端点不存在可识别", () => {
@@ -104,7 +163,11 @@ test("规则层 DAG：端点不存在可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /端点不存在/.test(error.message)));
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e1",
+    fromNodeId: "n1",
+    toNodeId: "n_missing",
+  });
 });
 
 test("规则层 DAG：自环可识别", () => {
@@ -115,7 +178,40 @@ test("规则层 DAG：自环可识别", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /自环/.test(error.message)));
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e1",
+    nodeId: "n1",
+    kind: "depends_on",
+  });
+});
+
+test("规则层 DAG：同一快照会聚合多个错误而非 fail-fast", () => {
+  const snapshot = createSnapshot(
+    ["n1", "n1", "n2"],
+    [
+      { id: "e1", fromNodeId: "n1", toNodeId: "n1", kind: "depends_on" },
+      { id: "e1", fromNodeId: "n2", toNodeId: "n1", kind: "depends_on" },
+      { id: "e3", fromNodeId: "n2", toNodeId: "n_missing", kind: "depends_on" },
+    ],
+  );
+
+  const validation = validateDagSnapshot(snapshot);
+
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.length >= 3);
+  expectContainsValidationError(validation.errors, {
+    nodeId: "n1",
+    nodeIndex: 1,
+  });
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e1",
+    edgeIndex: 1,
+  });
+  expectContainsValidationError(validation.errors, {
+    edgeId: "e3",
+    fromNodeId: "n2",
+    toNodeId: "n_missing",
+  });
 });
 
 test("规则层 DAG：环路可识别且拓扑排序会抛错", () => {
@@ -129,8 +225,16 @@ test("规则层 DAG：环路可识别且拓扑排序会抛错", () => {
   const validation = validateDagSnapshot(snapshot);
 
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) => /环路/.test(error.message)));
-  assert.throws(() => topologicalSort(snapshot), /DAG 校验失败/);
+  expectContainsValidationError(validation.errors, {
+    unresolvedNodeIds: ["n1", "n2"],
+  });
+  expectLightTaskError(() => topologicalSort(snapshot), {
+    code: "VALIDATION_ERROR",
+    message: "DAG 校验失败，无法执行拓扑排序",
+    details: {
+      errors: validation.errors,
+    },
+  });
 });
 
 test("规则层 DAG：拓扑排序结果稳定", () => {
@@ -168,10 +272,13 @@ test("规则层 DAG：当全部节点已完成时 ready 为空", () => {
 
 test("规则层 DAG：completedNodeIds 含未知节点时抛错", () => {
   const snapshot = createSnapshot(["n1"], []);
-  assert.throws(
-    () => findReadyNodeIds(snapshot, ["n_missing"]),
-    /completedNodeIds 包含不存在的节点/,
-  );
+  expectLightTaskError(() => findReadyNodeIds(snapshot, ["n_missing"]), {
+    code: "VALIDATION_ERROR",
+    message: "completedNodeIds 包含不存在的节点",
+    details: {
+      missingCompletedNodeIds: ["n_missing"],
+    },
+  });
 });
 
 test("规则层 DAG：非法图上计算 ready 会抛错", () => {
@@ -182,7 +289,14 @@ test("规则层 DAG：非法图上计算 ready 会抛错", () => {
       { id: "e2", fromNodeId: "n2", toNodeId: "n1", kind: "depends_on" },
     ],
   );
-  assert.throws(() => findReadyNodeIds(snapshot, []), /DAG 校验失败，无法计算 ready 节点/);
+  const validation = validateDagSnapshot(snapshot);
+  expectLightTaskError(() => findReadyNodeIds(snapshot, []), {
+    code: "VALIDATION_ERROR",
+    message: "DAG 校验失败，无法计算 ready 节点",
+    details: {
+      errors: validation.errors,
+    },
+  });
 });
 
 test("规则层 Idempotency：同 key 同指纹判定 replay", () => {
@@ -280,7 +394,12 @@ test("规则层 Idempotency：同 key 不同指纹判定 conflict", () => {
 
   assert.equal(decision.decision, "conflict");
   assert.equal(decision.error?.code, "STATE_CONFLICT");
-  assert.match(decision.reason, /不一致/);
+  assert.equal(decision.reason, decision.error?.message);
+  assert.deepEqual(decision.error?.details, {
+    idempotencyKey: "req_1",
+    incomingFingerprint: "fp_new",
+    storedFingerprint: "fp_old",
+  });
 });
 
 test("规则层 Revision：expected 与 next 校验可通过", () => {
@@ -289,8 +408,22 @@ test("规则层 Revision：expected 与 next 校验可通过", () => {
 });
 
 test("规则层 Revision：expected 与 next 校验冲突时抛错", () => {
-  assert.throws(() => assertExpectedRevision(3, 2), /REVISION_CONFLICT/);
-  assert.throws(() => assertNextRevision(3, 5), /REVISION_CONFLICT/);
+  expectLightTaskError(() => assertExpectedRevision(3, 2), {
+    code: "REVISION_CONFLICT",
+    message: "expectedRevision 与当前 revision 不一致",
+    details: {
+      currentRevision: 3,
+      expectedRevision: 2,
+    },
+  });
+  expectLightTaskError(() => assertNextRevision(3, 5), {
+    code: "REVISION_CONFLICT",
+    message: "nextRevision 必须严格等于 previousRevision + 1",
+    details: {
+      previousRevision: 3,
+      nextRevision: 5,
+    },
+  });
 });
 
 test("规则层 Revision：抛错遵循 LightTaskError 契约", () => {
@@ -312,9 +445,39 @@ test("规则层 Revision：抛错遵循 LightTaskError 契约", () => {
 });
 
 test("规则层 Revision：非法 revision 输入可识别", () => {
-  assert.throws(() => assertExpectedRevision(0, 1), /VALIDATION_ERROR/);
-  assert.throws(() => assertExpectedRevision(-1, 1), /VALIDATION_ERROR/);
-  assert.throws(() => assertExpectedRevision(1.5, 1), /VALIDATION_ERROR/);
-  assert.throws(() => assertNextRevision(2, 0), /VALIDATION_ERROR/);
-  assert.throws(() => assertNextRevision(1, 2.5), /VALIDATION_ERROR/);
+  expectLightTaskError(() => assertExpectedRevision(0, 1), {
+    code: "VALIDATION_ERROR",
+    message: "currentRevision 必须是大于等于 1 的整数",
+    details: {
+      currentRevision: 0,
+    },
+  });
+  expectLightTaskError(() => assertExpectedRevision(-1, 1), {
+    code: "VALIDATION_ERROR",
+    message: "currentRevision 必须是大于等于 1 的整数",
+    details: {
+      currentRevision: -1,
+    },
+  });
+  expectLightTaskError(() => assertExpectedRevision(1.5, 1), {
+    code: "VALIDATION_ERROR",
+    message: "currentRevision 必须是大于等于 1 的整数",
+    details: {
+      currentRevision: 1.5,
+    },
+  });
+  expectLightTaskError(() => assertNextRevision(2, 0), {
+    code: "VALIDATION_ERROR",
+    message: "nextRevision 必须是大于等于 1 的整数",
+    details: {
+      nextRevision: 0,
+    },
+  });
+  expectLightTaskError(() => assertNextRevision(1, 2.5), {
+    code: "VALIDATION_ERROR",
+    message: "nextRevision 必须是大于等于 1 的整数",
+    details: {
+      nextRevision: 2.5,
+    },
+  });
 });

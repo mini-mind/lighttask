@@ -8,6 +8,10 @@ const ROOT = process.env.LIGHTTASK_ARCH_CHECK_ROOT
   ? path.resolve(process.env.LIGHTTASK_ARCH_CHECK_ROOT)
   : path.resolve(SCRIPT_DIR, "..");
 const SRC_DIR = path.join(ROOT, "src");
+const SRC_DIR_REALPATH = fs.existsSync(SRC_DIR) ? fs.realpathSync(SRC_DIR) : undefined;
+const SRC_INDEX_FILE_REALPATH = SRC_DIR_REALPATH
+  ? path.join(SRC_DIR_REALPATH, "index.ts")
+  : undefined;
 const SRC_INDEX_FILE = path.join(SRC_DIR, "index.ts");
 const SOURCE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const PACKAGE_JSON_FILE = path.join(ROOT, "package.json");
@@ -61,7 +65,7 @@ function listSourceFiles(dir) {
         queue.push(fullPath);
         continue;
       }
-      if (/\.(ts|tsx|mts|cts)$/.test(entry.name)) {
+      if (SOURCE_FILE_EXTENSIONS.includes(path.extname(entry.name))) {
         files.push(fullPath);
       }
     }
@@ -106,8 +110,24 @@ function tryResolveCandidate(candidatePath) {
   return undefined;
 }
 
+function tryRealpath(targetPath) {
+  try {
+    return fs.realpathSync(targetPath);
+  } catch {
+    return undefined;
+  }
+}
+
+function isPathInside(parentPath, childPath) {
+  const rel = path.relative(parentPath, childPath);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 function getFileLayer(filePath) {
-  if (filePath === SRC_INDEX_FILE) {
+  if (
+    filePath === SRC_INDEX_FILE ||
+    (SRC_INDEX_FILE_REALPATH && filePath === SRC_INDEX_FILE_REALPATH)
+  ) {
     return "root";
   }
   for (const layerName of KNOWN_LAYERS) {
@@ -145,10 +165,21 @@ function detectTargetLayers(fromFilePath, specifier) {
     if (!resolvedPath) {
       return ["unresolved"];
     }
-    if (!resolvedPath.startsWith(SRC_DIR)) {
+
+    // 相对导入必须按真实路径做边界判定，防止 src 内 symlink 指向 src 外绕过检查。
+    const resolvedRealPath = tryRealpath(resolvedPath);
+    if (!resolvedRealPath) {
+      return ["unresolved"];
+    }
+    const isInsideSrc = SRC_DIR_REALPATH
+      ? isPathInside(SRC_DIR_REALPATH, resolvedRealPath)
+      : resolvedPath.startsWith(SRC_DIR);
+    if (!isInsideSrc) {
       return ["outside_src"];
     }
-    return [getFileLayer(resolvedPath)];
+
+    // 层归属也要基于真实路径，避免 src 内 symlink 伪装成当前层文件。
+    return [getFileLayer(resolvedRealPath)];
   }
 
   const normalized = specifier.replaceAll("\\", "/");
@@ -216,11 +247,15 @@ function isForbiddenCorePortsImplementationImport(sourceLayer, fromFilePath, spe
   }
 
   const resolvedPath = resolveRelativeImport(fromFilePath, specifier);
-  if (!resolvedPath || getFileLayer(resolvedPath) !== "ports") {
+  if (!resolvedPath) {
+    return false;
+  }
+  const resolvedRealPath = tryRealpath(resolvedPath);
+  if (!resolvedRealPath || getFileLayer(resolvedRealPath) !== "ports") {
     return false;
   }
 
-  return !isAllowedCorePortsTarget(resolvedPath);
+  return !isAllowedCorePortsTarget(resolvedRealPath);
 }
 
 function reportViolation(violations, rel, sourceLayer, specifier, targetLayer, allowedTargets) {

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PersistedLightTask } from "../core/types";
-import { LightTaskError, createLightTask } from "../index";
+import { LightTaskError, type LightTaskTask, createLightTask } from "../index";
 import type { TaskRepository } from "../ports";
 import { createTestLightTaskOptions } from "./ports-fixture";
+
+type TaskRecordFixture = LightTaskTask & {
+  lastAdvanceFingerprint?: string;
+};
 
 test("LightTask 公共 API 支持创建和推进任务", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
@@ -37,6 +40,7 @@ test("LightTask 公共 API 在不存在任务时推进会抛错", () => {
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "NOT_FOUND");
+      assert.equal(error.coreError.message, "未找到任务");
       assert.equal(error.details?.taskId, "task_missing");
       return true;
     },
@@ -125,14 +129,16 @@ test("LightTask 公共 API 在任务已全部完成后再次推进会抛错", ()
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "STATE_CONFLICT");
+      assert.equal(error.coreError.message, "任务没有可推进的进行中阶段");
       assert.equal(error.details?.taskId, task.id);
+      assert.equal(error.details?.currentStatus, "completed");
       return true;
     },
   );
 });
 
 test("LightTask 公共 API 在脏步骤快照缺少 doing 阶段时会拒绝 advance_one", () => {
-  const brokenTask: PersistedLightTask = {
+  const brokenTask: TaskRecordFixture = {
     id: "task_dirty_advance_one",
     title: "脏步骤快照",
     status: "queued",
@@ -162,7 +168,7 @@ test("LightTask 公共 API 在脏步骤快照缺少 doing 阶段时会拒绝 adv
     ],
   };
   let saveCalled = false;
-  const taskRepository: TaskRepository<PersistedLightTask> = {
+  const taskRepository: TaskRepository<TaskRecordFixture> = {
     list() {
       return [structuredClone(brokenTask)];
     },
@@ -191,6 +197,8 @@ test("LightTask 公共 API 在脏步骤快照缺少 doing 阶段时会拒绝 adv
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "STATE_CONFLICT");
+      assert.equal(error.coreError.message, "任务没有可推进的进行中阶段");
+      assert.equal(error.details?.taskId, brokenTask.id);
       return true;
     },
   );
@@ -202,7 +210,7 @@ test("LightTask 公共 API 在脏步骤快照缺少 doing 阶段时会拒绝 adv
 });
 
 test("LightTask 公共 API 在已收敛脏步骤快照上仍可执行 complete 收口", () => {
-  let storedTask: PersistedLightTask = {
+  let storedTask: TaskRecordFixture = {
     id: "task_dirty_complete_all",
     title: "已收敛脏步骤快照",
     status: "running",
@@ -231,7 +239,7 @@ test("LightTask 公共 API 在已收敛脏步骤快照上仍可执行 complete �
       },
     ],
   };
-  const taskRepository: TaskRepository<PersistedLightTask> = {
+  const taskRepository: TaskRepository<TaskRecordFixture> = {
     list() {
       return [structuredClone(storedTask)];
     },
@@ -328,6 +336,55 @@ test("LightTask 连续创建任务时 ID 应保持唯一", () => {
   assert.notEqual(first.id, second.id);
 });
 
+test("LightTask createTask 会标准化 idGenerator 返回的 taskId", () => {
+  const lighttask = createLightTask(
+    createTestLightTaskOptions({
+      idGenerator: {
+        nextTaskId() {
+          return "  task_trimmed  ";
+        },
+      },
+    }),
+  );
+
+  const created = lighttask.createTask({
+    title: "taskId trim 校验",
+  });
+
+  assert.equal(created.id, "task_trimmed");
+  assert.equal(created.steps[0].id, "task_trimmed_investigate");
+
+  const stored = lighttask.getTask("task_trimmed");
+  assert.ok(stored);
+  assert.equal(stored.id, "task_trimmed");
+});
+
+test("LightTask createTask 会拒绝空白 taskId", () => {
+  const lighttask = createLightTask(
+    createTestLightTaskOptions({
+      idGenerator: {
+        nextTaskId() {
+          return "   ";
+        },
+      },
+    }),
+  );
+
+  assert.throws(
+    () =>
+      lighttask.createTask({
+        title: "非法 taskId",
+      }),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      assert.equal(error.coreError.message, "任务 ID 不能为空");
+      assert.equal(error.details?.taskId, "");
+      return true;
+    },
+  );
+});
+
 test("LightTask 公共 API 支持摘要 trim 与空白归一化", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   const withSummary = lighttask.createTask({
@@ -357,6 +414,9 @@ test("LightTask 公共 API 支持 expectedRevision 校验", () => {
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "REVISION_CONFLICT");
+      assert.equal(error.coreError.message, "expectedRevision 与当前 revision 不一致");
+      assert.equal(error.details?.expectedRevision, 2);
+      assert.equal(error.details?.currentRevision, 1);
       return true;
     },
   );
@@ -432,7 +492,9 @@ test("LightTask 公共 API 在 failed/cancelled 终态后再次推进会拒绝�
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "STATE_CONFLICT");
+      assert.equal(error.coreError.message, "任务没有可推进的进行中阶段");
       assert.equal(error.details?.taskId, failedTask.id);
+      assert.equal(error.details?.currentStatus, "failed");
       return true;
     },
   );
@@ -453,7 +515,9 @@ test("LightTask 公共 API 在 failed/cancelled 终态后再次推进会拒绝�
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "STATE_CONFLICT");
+      assert.equal(error.coreError.message, "任务没有可推进的进行中阶段");
       assert.equal(error.details?.taskId, cancelledTask.id);
+      assert.equal(error.details?.currentStatus, "cancelled");
       return true;
     },
   );
@@ -513,6 +577,9 @@ test("LightTask 公共 API 对显式非法动作抛出状态冲突", () => {
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "STATE_CONFLICT");
+      assert.equal(error.coreError.message, "任务状态迁移冲突");
+      assert.equal(error.details?.currentStatus, "queued");
+      assert.equal(error.details?.action, "start");
       return true;
     },
   );
@@ -551,6 +618,8 @@ test("LightTask 公共 API 会拦截非法 expectedRevision 输入", () => {
       (error) => {
         assert.ok(error instanceof LightTaskError);
         assert.equal(error.code, "VALIDATION_ERROR");
+        assert.equal(error.coreError.message, "expectedRevision 必须是大于等于 1 的整数");
+        assert.equal(error.details?.expectedRevision, invalidExpectedRevision);
         return true;
       },
     );
@@ -558,8 +627,8 @@ test("LightTask 公共 API 会拦截非法 expectedRevision 输入", () => {
 });
 
 test("LightTask 公共 API 支持注入最小系统端口与任务仓储", () => {
-  const snapshots: PersistedLightTask[] = [];
-  const taskRepository: TaskRepository<PersistedLightTask> = {
+  const snapshots: TaskRecordFixture[] = [];
+  const taskRepository: TaskRepository<TaskRecordFixture> = {
     list() {
       return snapshots.map((task) => structuredClone(task));
     },
@@ -568,7 +637,7 @@ test("LightTask 公共 API 支持注入最小系统端口与任务仓储", () =>
       return task ? structuredClone(task) : undefined;
     },
     create(task) {
-      const snapshot: PersistedLightTask = {
+      const snapshot: TaskRecordFixture = {
         ...structuredClone(task),
         createdAt: "2026-04-13T08:00:01.000Z",
         summary: "由仓储补齐摘要",
@@ -590,7 +659,7 @@ test("LightTask 公共 API 支持注入最小系统端口与任务仓储", () =>
       };
     },
     saveIfRevisionMatches(task, expectedRevision) {
-      const snapshot: PersistedLightTask = {
+      const snapshot: TaskRecordFixture = {
         ...structuredClone(task),
         idempotencyKey: "repo_dispatch_1",
         summary: "由仓储回写推进摘要",
@@ -656,4 +725,128 @@ test("LightTask 公共 API 支持注入最小系统端口与任务仓储", () =>
   assert.equal(snapshots[0].revision, 2);
   assert.equal(snapshots[0].steps[0].status, "done");
   assert.equal(snapshots[0].steps[1].status, "doing");
+});
+
+test("LightTask Task API 只要求当前 task 用例依赖，不前置耦合 plan/graph 能力", () => {
+  let storedTask: TaskRecordFixture | undefined;
+  const lighttask = createLightTask({
+    taskRepository: {
+      list() {
+        return storedTask ? [structuredClone(storedTask)] : [];
+      },
+      get(taskId: string) {
+        return storedTask && taskId === storedTask.id ? structuredClone(storedTask) : undefined;
+      },
+      create(task: TaskRecordFixture) {
+        storedTask = structuredClone(task);
+        return {
+          ok: true as const,
+          task: structuredClone(task),
+        };
+      },
+      saveIfRevisionMatches(task: TaskRecordFixture, expectedRevision: number) {
+        assert.ok(storedTask);
+        assert.equal(expectedRevision, storedTask.revision);
+        storedTask = structuredClone(task);
+        return {
+          ok: true as const,
+          task: structuredClone(task),
+        };
+      },
+    },
+    planRepository: {},
+    graphRepository: {},
+    clock: {
+      now() {
+        return "2026-04-14T00:00:00.000Z";
+      },
+    },
+    idGenerator: {
+      nextTaskId() {
+        return "task_minimal_repo";
+      },
+    },
+  });
+
+  const created = lighttask.createTask({
+    title: "最小任务依赖",
+  });
+  const listed = lighttask.listTasks();
+  const fetched = lighttask.getTask("task_minimal_repo");
+  const advanced = lighttask.advanceTask("task_minimal_repo", {
+    expectedRevision: 1,
+  });
+
+  assert.equal(created.id, "task_minimal_repo");
+  assert.equal(listed.length, 1);
+  assert.equal(fetched?.title, "最小任务依赖");
+  assert.equal(advanced.revision, 2);
+});
+
+test("LightTask advanceTask 走推进路径时不前置要求 list/create/clock/idGenerator", () => {
+  let storedTask: TaskRecordFixture = {
+    id: "task_advance_minimal",
+    title: "推进最小依赖",
+    status: "queued",
+    revision: 1,
+    createdAt: "2026-04-14T00:00:00.000Z",
+    steps: [
+      {
+        id: "task_advance_minimal_investigate",
+        title: "investigate",
+        stage: "investigate",
+        status: "doing",
+      },
+      {
+        id: "task_advance_minimal_design",
+        title: "design",
+        stage: "design",
+        status: "todo",
+      },
+      {
+        id: "task_advance_minimal_implement",
+        title: "implement",
+        stage: "implement",
+        status: "todo",
+      },
+      {
+        id: "task_advance_minimal_verify",
+        title: "verify",
+        stage: "verify",
+        status: "todo",
+      },
+      {
+        id: "task_advance_minimal_converge",
+        title: "converge",
+        stage: "converge",
+        status: "todo",
+      },
+    ],
+  };
+  const lighttask = createLightTask({
+    taskRepository: {
+      get(taskId: string) {
+        return taskId === storedTask.id ? structuredClone(storedTask) : undefined;
+      },
+      saveIfRevisionMatches(task: TaskRecordFixture, expectedRevision: number) {
+        assert.equal(expectedRevision, storedTask.revision);
+        storedTask = structuredClone(task);
+        return {
+          ok: true as const,
+          task: structuredClone(task),
+        };
+      },
+    },
+    planRepository: {},
+    graphRepository: {},
+    clock: {},
+    idGenerator: {},
+  });
+
+  const advanced = lighttask.advanceTask("task_advance_minimal", {
+    expectedRevision: 1,
+  });
+
+  assert.equal(advanced.status, "dispatched");
+  assert.equal(advanced.revision, 2);
 });

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PersistedLightTask } from "../core/types";
 import type { GraphSnapshot, PlanSessionRecord } from "../data-structures";
 import {
   createInMemoryGraphRepository,
@@ -10,7 +9,24 @@ import {
   createTaskIdGenerator,
 } from "../ports/in-memory";
 
-function createPersistedTask(taskId: string, revision = 1): PersistedLightTask {
+type TaskStepFixture = {
+  id: string;
+  title: string;
+  stage: string;
+  status: string;
+};
+
+type TaskRecordFixture = {
+  id: string;
+  title: string;
+  summary: string;
+  status: string;
+  revision: number;
+  createdAt: string;
+  steps: TaskStepFixture[];
+};
+
+function createPersistedTask(taskId: string, revision = 1): TaskRecordFixture {
   return {
     id: taskId,
     title: `任务 ${taskId}`,
@@ -78,7 +94,7 @@ function createGraphSnapshot(revision = 1): GraphSnapshot {
 }
 
 test("端口层 in-memory：task create/get/list 返回快照与内部状态隔离", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const created = repository.create(createPersistedTask("task_repo_1"));
   assert.equal(created.ok, true);
   if (!created.ok) {
@@ -103,8 +119,27 @@ test("端口层 in-memory：task create/get/list 返回快照与内部状态隔�
   assert.equal(refetched.steps[0].status, "doing");
 });
 
+test("端口层 in-memory：task create 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
+  const original = createPersistedTask("task_input_create");
+
+  const created = repository.create(original);
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  original.title = "外部修改原入参";
+  original.steps[0].status = "done";
+
+  const fetched = repository.get("task_input_create");
+  assert.ok(fetched);
+  assert.equal(fetched.title, "任务 task_input_create");
+  assert.equal(fetched.steps[0].status, "doing");
+});
+
 test("端口层 in-memory：task 重复创建相同 taskId 会返回冲突错误", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const first = repository.create(createPersistedTask("task_duplicate"));
   assert.equal(first.ok, true);
 
@@ -118,7 +153,7 @@ test("端口层 in-memory：task 重复创建相同 taskId 会返回冲突错误
 });
 
 test("端口层 in-memory：task saveIfRevisionMatches 在任务不存在时返回 NOT_FOUND", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const saved = repository.saveIfRevisionMatches(createPersistedTask("task_missing", 2), 1);
 
   assert.equal(saved.ok, false);
@@ -130,7 +165,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 在任务不存在时返�
 });
 
 test("端口层 in-memory：task saveIfRevisionMatches 在 revision 冲突时返回 REVISION_CONFLICT", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const created = repository.create(createPersistedTask("task_revision"));
   assert.equal(created.ok, true);
   if (!created.ok) {
@@ -154,7 +189,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 在 revision 冲突时返
 });
 
 test("端口层 in-memory：task saveIfRevisionMatches 在 revision 匹配时成功保存", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const created = repository.create(createPersistedTask("task_save"));
   assert.equal(created.ok, true);
   if (!created.ok) {
@@ -184,7 +219,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 在 revision 匹配时成
 });
 
 test("端口层 in-memory：task saveIfRevisionMatches 成功返回值与内部状态隔离", () => {
-  const repository = createInMemoryTaskRepository<PersistedLightTask>();
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
   const created = repository.create(createPersistedTask("task_save_snapshot"));
   assert.equal(created.ok, true);
   if (!created.ok) {
@@ -211,6 +246,52 @@ test("端口层 in-memory：task saveIfRevisionMatches 成功返回值与内部�
   assert.equal(fetched.steps[0].status, "done");
 });
 
+test("端口层 in-memory：task saveIfRevisionMatches 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
+  const created = repository.create(createPersistedTask("task_input_save"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const next = createPersistedTask("task_input_save", 2);
+  next.status = "dispatched";
+  next.steps[0].status = "done";
+
+  const saved = repository.saveIfRevisionMatches(next, 1);
+  assert.equal(saved.ok, true);
+  if (!saved.ok) {
+    assert.fail("revision 匹配时必须成功");
+  }
+
+  next.title = "外部修改原入参";
+  next.steps[0].status = "todo";
+
+  const fetched = repository.get("task_input_save");
+  assert.ok(fetched);
+  assert.equal(fetched.title, "任务 task_input_save");
+  assert.equal(fetched.steps[0].status, "done");
+});
+
+test("端口层 in-memory：task get 返回值与内部状态隔离", () => {
+  const repository = createInMemoryTaskRepository<TaskRecordFixture>();
+  const created = repository.create(createPersistedTask("task_get_snapshot"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const fetched = repository.get("task_get_snapshot");
+  assert.ok(fetched);
+  fetched.title = "外部篡改";
+  fetched.steps[0].status = "done";
+
+  const refetched = repository.get("task_get_snapshot");
+  assert.ok(refetched);
+  assert.equal(refetched.title, "任务 task_get_snapshot");
+  assert.equal(refetched.steps[0].status, "doing");
+});
+
 test("端口层 in-memory：plan create/get/list 返回快照与内部状态隔离", () => {
   const repository = createInMemoryPlanRepository<PlanSessionRecord>();
   const created = repository.create(createPlan("plan_repo_1"));
@@ -234,6 +315,26 @@ test("端口层 in-memory：plan create/get/list 返回快照与内部状态隔�
   const refetched = repository.get("plan_repo_1");
   assert.ok(refetched);
   assert.equal(refetched.title, "计划 plan_repo_1");
+});
+
+test("端口层 in-memory：plan create 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryPlanRepository<PlanSessionRecord>();
+  const original = createPlan("plan_input_create");
+
+  const created = repository.create(original);
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  original.title = "外部修改原入参";
+  assert.ok(original.metadata);
+  original.metadata.owner = { name: "changed" };
+
+  const fetched = repository.get("plan_input_create");
+  assert.ok(fetched);
+  assert.equal(fetched.title, "计划 plan_input_create");
+  assert.deepEqual(fetched.metadata, { owner: { name: "tester" } });
 });
 
 test("端口层 in-memory：plan 重复创建相同 planId 会返回冲突错误", () => {
@@ -308,6 +409,80 @@ test("端口层 in-memory：plan saveIfRevisionMatches 在 revision 匹配时成
   assert.equal(fetched.revision, 2);
 });
 
+test("端口层 in-memory：plan saveIfRevisionMatches 成功返回值与内部状态隔离", () => {
+  const repository = createInMemoryPlanRepository<PlanSessionRecord>();
+  const created = repository.create(createPlan("plan_save_snapshot"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const next = createPlan("plan_save_snapshot", 2);
+  next.status = "ready";
+
+  const saved = repository.saveIfRevisionMatches(next, 1);
+  assert.equal(saved.ok, true);
+  if (!saved.ok) {
+    assert.fail("revision 匹配时必须成功");
+  }
+
+  saved.plan.title = "外部篡改";
+  assert.ok(saved.plan.metadata);
+  saved.plan.metadata.owner = { name: "mutated" };
+
+  const fetched = repository.get("plan_save_snapshot");
+  assert.ok(fetched);
+  assert.equal(fetched.title, "计划 plan_save_snapshot");
+  assert.deepEqual(fetched.metadata, { owner: { name: "tester" } });
+});
+
+test("端口层 in-memory：plan saveIfRevisionMatches 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryPlanRepository<PlanSessionRecord>();
+  const created = repository.create(createPlan("plan_input_save"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const next = createPlan("plan_input_save", 2);
+  next.status = "ready";
+
+  const saved = repository.saveIfRevisionMatches(next, 1);
+  assert.equal(saved.ok, true);
+  if (!saved.ok) {
+    assert.fail("revision 匹配时必须成功");
+  }
+
+  next.title = "外部修改原入参";
+  assert.ok(next.metadata);
+  next.metadata.owner = { name: "changed" };
+
+  const fetched = repository.get("plan_input_save");
+  assert.ok(fetched);
+  assert.equal(fetched.title, "计划 plan_input_save");
+  assert.deepEqual(fetched.metadata, { owner: { name: "tester" } });
+});
+
+test("端口层 in-memory：plan get 返回值与内部状态隔离", () => {
+  const repository = createInMemoryPlanRepository<PlanSessionRecord>();
+  const created = repository.create(createPlan("plan_get_snapshot"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const fetched = repository.get("plan_get_snapshot");
+  assert.ok(fetched);
+  fetched.title = "外部篡改";
+  assert.ok(fetched.metadata);
+  fetched.metadata.owner = { name: "changed" };
+
+  const refetched = repository.get("plan_get_snapshot");
+  assert.ok(refetched);
+  assert.equal(refetched.title, "计划 plan_get_snapshot");
+  assert.deepEqual(refetched.metadata, { owner: { name: "tester" } });
+});
+
 test("端口层 in-memory：graph get/create 返回快照与内部状态隔离", () => {
   const repository = createInMemoryGraphRepository<GraphSnapshot>();
   const created = repository.create("plan_graph_1", createGraphSnapshot());
@@ -321,6 +496,26 @@ test("端口层 in-memory：graph get/create 返回快照与内部状态隔离",
   created.graph.nodes[0].metadata.rank = 99;
 
   const fetched = repository.get("plan_graph_1");
+  assert.ok(fetched);
+  assert.equal(fetched.nodes[0].label, "任务一");
+  assert.deepEqual(fetched.nodes[0].metadata, { rank: 1 });
+});
+
+test("端口层 in-memory：graph create 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryGraphRepository<GraphSnapshot>();
+  const original = createGraphSnapshot();
+
+  const created = repository.create("plan_graph_input_create", original);
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  original.nodes[0].label = "外部修改原入参";
+  assert.ok(original.nodes[0].metadata);
+  original.nodes[0].metadata.rank = 99;
+
+  const fetched = repository.get("plan_graph_input_create");
   assert.ok(fetched);
   assert.equal(fetched.nodes[0].label, "任务一");
   assert.deepEqual(fetched.nodes[0].metadata, { rank: 1 });
@@ -371,6 +566,42 @@ test("端口层 in-memory：graph saveIfRevisionMatches 在 revision 冲突时�
   assert.equal(saved.error.details?.actualRevision, 1);
 });
 
+test("端口层 in-memory：graph saveIfRevisionMatches revision 冲突失败后不会污染已存状态", () => {
+  const repository = createInMemoryGraphRepository<GraphSnapshot>();
+  const created = repository.create("plan_graph_revision_keep_snapshot", createGraphSnapshot());
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const before = repository.get("plan_graph_revision_keep_snapshot");
+  assert.ok(before);
+
+  const conflicting = createGraphSnapshot(2);
+  conflicting.nodes[0].label = "冲突写入";
+  assert.ok(conflicting.nodes[0].metadata);
+  conflicting.nodes[0].metadata.rank = 999;
+  conflicting.edges = [];
+
+  const saved = repository.saveIfRevisionMatches(
+    "plan_graph_revision_keep_snapshot",
+    conflicting,
+    2,
+  );
+  assert.equal(saved.ok, false);
+  if (saved.ok) {
+    assert.fail("revision 冲突必须失败");
+  }
+  assert.equal(saved.error.code, "REVISION_CONFLICT");
+  assert.equal(saved.error.details?.planId, "plan_graph_revision_keep_snapshot");
+  assert.equal(saved.error.details?.expectedRevision, 2);
+  assert.equal(saved.error.details?.actualRevision, 1);
+
+  const fetched = repository.get("plan_graph_revision_keep_snapshot");
+  assert.ok(fetched);
+  assert.deepEqual(fetched, before);
+});
+
 test("端口层 in-memory：graph saveIfRevisionMatches 在 revision 匹配时成功保存", () => {
   const repository = createInMemoryGraphRepository<GraphSnapshot>();
   const created = repository.create("plan_graph_save", createGraphSnapshot());
@@ -418,6 +649,53 @@ test("端口层 in-memory：graph saveIfRevisionMatches 成功返回值与内部
   assert.ok(fetched);
   assert.equal(fetched.nodes[0].label, "任务一");
   assert.deepEqual(fetched.nodes[0].metadata, { rank: 1 });
+});
+
+test("端口层 in-memory：graph saveIfRevisionMatches 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryGraphRepository<GraphSnapshot>();
+  const created = repository.create("plan_graph_input_save", createGraphSnapshot());
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const next = createGraphSnapshot(2);
+  next.nodes[0].label = "已保存图";
+
+  const saved = repository.saveIfRevisionMatches("plan_graph_input_save", next, 1);
+  assert.equal(saved.ok, true);
+  if (!saved.ok) {
+    assert.fail("revision 匹配时必须成功");
+  }
+
+  next.nodes[0].label = "外部修改原入参";
+  assert.ok(next.nodes[0].metadata);
+  next.nodes[0].metadata.rank = 99;
+
+  const fetched = repository.get("plan_graph_input_save");
+  assert.ok(fetched);
+  assert.equal(fetched.nodes[0].label, "已保存图");
+  assert.deepEqual(fetched.nodes[0].metadata, { rank: 1 });
+});
+
+test("端口层 in-memory：graph get 返回值与内部状态隔离", () => {
+  const repository = createInMemoryGraphRepository<GraphSnapshot>();
+  const created = repository.create("plan_graph_get_snapshot", createGraphSnapshot());
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const fetched = repository.get("plan_graph_get_snapshot");
+  assert.ok(fetched);
+  fetched.nodes[0].label = "外部篡改";
+  assert.ok(fetched.nodes[0].metadata);
+  fetched.nodes[0].metadata.rank = 99;
+
+  const refetched = repository.get("plan_graph_get_snapshot");
+  assert.ok(refetched);
+  assert.equal(refetched.nodes[0].label, "任务一");
+  assert.deepEqual(refetched.nodes[0].metadata, { rank: 1 });
 });
 test("端口层 in-memory：系统时钟返回 ISO 时间字符串", () => {
   const clock = createSystemClock();

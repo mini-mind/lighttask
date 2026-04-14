@@ -1,4 +1,8 @@
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import {
+  createLightTaskError,
+  requireLightTaskFunction,
+  throwLightTaskError,
+} from "./lighttask-error";
 import { toPublicPlan } from "./plan-snapshot";
 import type { CreateLightTaskOptions, LightTaskPlan } from "./types";
 
@@ -6,6 +10,7 @@ export function getPlanUseCase(
   options: CreateLightTaskOptions,
   planId: string,
 ): LightTaskPlan | undefined {
+  const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const normalizedPlanId = planId.trim();
 
   if (!normalizedPlanId) {
@@ -16,6 +21,6 @@ export function getPlanUseCase(
     );
   }
 
-  const plan = options.planRepository.get(normalizedPlanId);
+  const plan = getPlan(normalizedPlanId);
   return plan ? toPublicPlan(plan) : undefined;
 }

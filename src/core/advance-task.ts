@@ -5,7 +5,11 @@ import {
   selectDefaultTaskAction,
   transitionTaskStatus,
 } from "../rules";
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import {
+  createLightTaskError,
+  requireLightTaskFunction,
+  throwLightTaskError,
+} from "./lighttask-error";
 import { applyTaskStepProgress } from "./task-progress";
 import { buildAdvanceFingerprint, clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type { AdvanceTaskInput, CreateLightTaskOptions, LightTaskTask } from "./types";
@@ -29,8 +33,13 @@ export function advanceTaskUseCase(
   taskId: string,
   input: AdvanceTaskInput,
 ): LightTaskTask {
+  const getTask = requireLightTaskFunction(options.taskRepository?.get, "taskRepository.get");
+  const saveIfRevisionMatches = requireLightTaskFunction(
+    options.taskRepository?.saveIfRevisionMatches,
+    "taskRepository.saveIfRevisionMatches",
+  );
   const normalizedTaskId = assertTaskId(taskId);
-  const storedTask = options.taskRepository.get(normalizedTaskId);
+  const storedTask = getTask(normalizedTaskId);
   if (!storedTask) {
     throwLightTaskError(
       createLightTaskError("NOT_FOUND", "未找到任务", {
@@ -94,7 +103,7 @@ export function advanceTaskUseCase(
   task.lastAdvanceFingerprint = incomingFingerprint;
   applyTaskStepProgress(task, action);
 
-  const saved = options.taskRepository.saveIfRevisionMatches(task, storedTask.revision);
+  const saved = saveIfRevisionMatches(task, storedTask.revision);
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }

@@ -1,4 +1,8 @@
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import {
+  createLightTaskError,
+  requireLightTaskFunction,
+  throwLightTaskError,
+} from "./lighttask-error";
 import { createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -11,9 +15,27 @@ export function createTaskUseCase(
   options: CreateLightTaskOptions,
   input: CreateTaskInput,
 ): LightTaskTask {
-  const taskId = options.idGenerator.nextTaskId();
+  const nextTaskId = requireLightTaskFunction(
+    options.idGenerator?.nextTaskId,
+    "idGenerator.nextTaskId",
+  );
+  const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const createTask = requireLightTaskFunction(
+    options.taskRepository?.create,
+    "taskRepository.create",
+  );
+  const taskId = nextTaskId().trim();
   const title = input.title.trim();
   const summary = input.summary?.trim() || undefined;
+
+  if (!taskId) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", {
+        taskId,
+      }),
+    );
+  }
+
   if (!title) {
     throwLightTaskError(
       createLightTaskError("VALIDATION_ERROR", "任务标题不能为空", {
@@ -29,11 +51,11 @@ export function createTaskUseCase(
     status: "queued",
     revision: 1,
     idempotencyKey: undefined,
-    createdAt: options.clock.now(),
+    createdAt: clockNow(),
     steps: createDefaultTaskSteps(taskId),
   };
 
-  const created = options.taskRepository.create(task);
+  const created = createTask(task);
   if (!created.ok) {
     throwLightTaskError(created.error);
   }

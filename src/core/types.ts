@@ -92,12 +92,16 @@ export interface CorePlanCreateGetRepository<TPlan extends { id: string; revisio
   create(plan: TPlan): PlanRepositoryWriteResult<TPlan>;
 }
 
+type LazyValidatedPort<TPort> = {
+  [K in keyof TPort]?: TPort[K];
+};
+
 export interface CreateLightTaskOptions {
-  taskRepository: TaskRepository<PersistedLightTask>;
-  planRepository: CorePlanCreateGetRepository<PersistedLightPlan>;
-  graphRepository: GraphRepository<PersistedLightGraph>;
-  clock: ClockPort;
-  idGenerator: IdGeneratorPort;
+  taskRepository: LazyValidatedPort<TaskRepository<PersistedLightTask>>;
+  planRepository: LazyValidatedPort<CorePlanCreateGetRepository<PersistedLightPlan>>;
+  graphRepository: LazyValidatedPort<GraphRepository<PersistedLightGraph>>;
+  clock: LazyValidatedPort<ClockPort>;
+  idGenerator: LazyValidatedPort<IdGeneratorPort>;
 }
 
 export interface LightTaskKernel {

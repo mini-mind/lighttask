@@ -1,9 +1,4 @@
-import type {
-  CreateLightTaskOptions,
-  PersistedLightGraph,
-  PersistedLightPlan,
-  PersistedLightTask,
-} from "../core/types";
+import type { LightTaskGraph, LightTaskPlan, LightTaskTask, createLightTask } from "../index";
 import {
   createInMemoryGraphRepository,
   createInMemoryPlanRepository,
@@ -12,14 +7,19 @@ import {
   createTaskIdGenerator,
 } from "../ports/in-memory";
 
+type TaskRecordFixture = LightTaskTask & {
+  lastAdvanceFingerprint?: string;
+};
+
+type TestLightTaskOptions = Parameters<typeof createLightTask>[0];
+
 export function createTestLightTaskOptions(
-  overrides: Partial<CreateLightTaskOptions> = {},
-): CreateLightTaskOptions {
+  overrides: Partial<TestLightTaskOptions> = {},
+): TestLightTaskOptions {
   return {
-    taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<PersistedLightTask>(),
-    planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PersistedLightPlan>(),
-    graphRepository:
-      overrides.graphRepository ?? createInMemoryGraphRepository<PersistedLightGraph>(),
+    taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<TaskRecordFixture>(),
+    planRepository: overrides.planRepository ?? createInMemoryPlanRepository<LightTaskPlan>(),
+    graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<LightTaskGraph>(),
     clock: overrides.clock ?? createSystemClock(),
     idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),
   };
