@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LightTaskError, type LightTaskPlan, createLightTask } from "../index";
-import { createTestLightTaskOptions } from "./ports-fixture";
+import { assertInvalidDependencyCases, createTestLightTaskOptions } from "./ports-fixture";
 
 test("LightTask Plan API 支持创建与读取计划", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
@@ -228,24 +228,7 @@ test("LightTask Plan API 在注入坏依赖时会逐项报告缺失 plan 端口�
     },
   ];
 
-  for (const invalidCase of invalidOptionsCases) {
-    const lighttask = createLightTask({
-      ...createTestLightTaskOptions(),
-      ...invalidCase.options,
-    });
-
-    assert.throws(
-      () => invalidCase.invoke(lighttask),
-      (error) => {
-        assert.ok(error instanceof LightTaskError);
-        assert.equal(error.code, "VALIDATION_ERROR");
-        assert.equal(error.coreError.message, `${invalidCase.name} 必须是函数`);
-        assert.equal(error.details?.path, invalidCase.name);
-        return true;
-      },
-      `${invalidCase.name} 在对应 API 调用时应报对应 path`,
-    );
-  }
+  assertInvalidDependencyCases(invalidOptionsCases);
 });
 
 test("LightTask Plan API 只要求当前已落地 plan 依赖，不前置耦合 task/graph 能力", () => {

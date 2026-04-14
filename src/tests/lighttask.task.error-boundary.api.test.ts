@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LightTaskError, type LightTaskTask, createLightTask } from "../index";
 import type { TaskRepository } from "../ports";
-import { createTestLightTaskOptions } from "./ports-fixture";
+import { assertInvalidDependencyCases, createTestLightTaskOptions } from "./ports-fixture";
 
 type TaskRecordFixture = LightTaskTask & {
   lastAdvanceFingerprint?: string;
@@ -464,24 +464,7 @@ test("LightTask 在注入坏依赖时会逐项报告缺失端口函数", () => {
     },
   ];
 
-  for (const invalidCase of invalidOptionsCases) {
-    const lighttask = createLightTask({
-      ...createTestLightTaskOptions(),
-      ...invalidCase.options,
-    });
-
-    assert.throws(
-      () => invalidCase.invoke(lighttask),
-      (error) => {
-        assert.ok(error instanceof LightTaskError);
-        assert.equal(error.code, "VALIDATION_ERROR");
-        assert.equal(error.coreError.message, `${invalidCase.name} 必须是函数`);
-        assert.equal(error.details?.path, invalidCase.name);
-        return true;
-      },
-      `${invalidCase.name} 在对应 API 调用时应报对应 path`,
-    );
-  }
+  assertInvalidDependencyCases(invalidOptionsCases);
 });
 
 test("LightTask listTasks 在端口直接抛出原生异常时会归一化为 LightTaskError", () => {

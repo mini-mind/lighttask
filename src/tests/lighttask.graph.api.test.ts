@@ -1,7 +1,59 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LightTaskError, type LightTaskGraph, createLightTask } from "../index";
-import { createTestLightTaskOptions } from "./ports-fixture";
+import { assertInvalidDependencyCases, createTestLightTaskOptions } from "./ports-fixture";
+
+type ExpectedLightTaskError = {
+  code: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  verify?: (error: LightTaskError) => void;
+};
+
+// 仅在本文件内复用错误断言，避免把局部测试模式扩散成跨文件 DSL。
+function expectLightTaskError(
+  action: () => unknown,
+  expected: ExpectedLightTaskError,
+  message?: string,
+): void {
+  assert.throws(
+    action,
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, expected.code);
+
+      if (expected.message !== undefined) {
+        assert.equal(error.coreError.message, expected.message);
+      }
+
+      for (const [detailKey, detailValue] of Object.entries(expected.details ?? {})) {
+        assert.equal(
+          (error.details as Record<string, unknown> | undefined)?.[detailKey],
+          detailValue,
+        );
+      }
+
+      expected.verify?.(error);
+      return true;
+    },
+    message,
+  );
+}
+
+function expectInvariantViolationFromTypeError(
+  action: () => unknown,
+  message?: string,
+  verify?: (error: LightTaskError) => void,
+): void {
+  expectLightTaskError(action, {
+    code: "INVARIANT_VIOLATION",
+    message,
+    details: {
+      originalErrorName: "TypeError",
+    },
+    verify,
+  });
+}
 
 test("LightTask Graph API 查询不存在图快照时返回 undefined", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
@@ -42,16 +94,13 @@ test("LightTask Graph API 在计划不存在但图快照存在时返回 NOT_FOUN
     },
   });
 
-  assert.throws(
-    () => lighttask.getGraph("plan_orphan"),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "NOT_FOUND");
-      assert.equal(error.coreError.message, "未找到计划，无法读取图快照");
-      assert.equal(error.details?.planId, "plan_orphan");
-      return true;
+  expectLightTaskError(() => lighttask.getGraph("plan_orphan"), {
+    code: "NOT_FOUND",
+    message: "未找到计划，无法读取图快照",
+    details: {
+      planId: "plan_orphan",
     },
-  );
+  });
 });
 
 test("LightTask Graph API 查询时会标准化 planId", () => {
@@ -73,16 +122,13 @@ test("LightTask Graph API 查询时会标准化 planId", () => {
 test("LightTask Graph API 查询空白 planId 时会抛校验错误", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
-  assert.throws(
-    () => lighttask.getGraph("   "),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "计划 ID 不能为空");
-      assert.equal(error.details?.planId, "   ");
-      return true;
+  expectLightTaskError(() => lighttask.getGraph("   "), {
+    code: "VALIDATION_ERROR",
+    message: "计划 ID 不能为空",
+    details: {
+      planId: "   ",
     },
-  );
+  });
 });
 
 test("LightTask Graph API 保存时会标准化 planId", () => {
@@ -104,18 +150,18 @@ test("LightTask Graph API 保存时会标准化 planId", () => {
 test("LightTask Graph API 保存空白 planId 时会抛校验错误", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("   ", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "计划 ID 不能为空");
-      assert.equal(error.details?.planId, "   ");
-      return true;
+    {
+      code: "VALIDATION_ERROR",
+      message: "计划 ID 不能为空",
+      details: {
+        planId: "   ",
+      },
     },
   );
 });
@@ -225,20 +271,20 @@ test("LightTask Graph API 在 expectedRevision 冲突时会拒绝覆盖已有图
     edges: [],
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_revision_conflict", {
         expectedRevision: 2,
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "REVISION_CONFLICT");
-      assert.equal(error.coreError.message, "expectedRevision 与当前 revision 不一致");
-      assert.equal(error.details?.expectedRevision, 2);
-      assert.equal(error.details?.currentRevision, 1);
-      return true;
+    {
+      code: "REVISION_CONFLICT",
+      message: "expectedRevision 与当前 revision 不一致",
+      details: {
+        expectedRevision: 2,
+        currentRevision: 1,
+      },
     },
   );
 });
@@ -287,19 +333,19 @@ test("LightTask Graph API 在读取后图被并发删除时返回 NOT_FOUND", ()
     title: "图并发删除",
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_deleted", {
         expectedRevision: 1,
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "NOT_FOUND");
-      assert.equal(error.coreError.message, "计划图不存在，无法保存变更");
-      assert.equal(error.details?.planId, "plan_graph_deleted");
-      return true;
+    {
+      code: "NOT_FOUND",
+      message: "计划图不存在，无法保存变更",
+      details: {
+        planId: "plan_graph_deleted",
+      },
     },
   );
 });
@@ -307,18 +353,18 @@ test("LightTask Graph API 在读取后图被并发删除时返回 NOT_FOUND", ()
 test("LightTask Graph API 保存图快照前要求计划已存在", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_missing", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "NOT_FOUND");
-      assert.equal(error.coreError.message, "未找到计划，无法保存图快照");
-      assert.equal(error.details?.planId, "plan_missing");
-      return true;
+    {
+      code: "NOT_FOUND",
+      message: "未找到计划，无法保存图快照",
+      details: {
+        planId: "plan_missing",
+      },
     },
   );
 });
@@ -392,7 +438,7 @@ test("LightTask Graph API 保存图快照时不应重复探测 plan 与 graph", 
 test("LightTask Graph API 在计划不存在且图输入非法时优先返回 NOT_FOUND", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_missing", {
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
@@ -400,12 +446,12 @@ test("LightTask Graph API 在计划不存在且图输入非法时优先返回 NO
           { id: "edge_1", fromNodeId: "node_1", toNodeId: "node_missing", kind: "depends_on" },
         ],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "NOT_FOUND");
-      assert.equal(error.coreError.message, "未找到计划，无法保存图快照");
-      assert.equal("errors" in (error.details ?? {}), false);
-      return true;
+    {
+      code: "NOT_FOUND",
+      message: "未找到计划，无法保存图快照",
+      verify(error) {
+        assert.equal("errors" in (error.details ?? {}), false);
+      },
     },
   );
 });
@@ -417,19 +463,19 @@ test("LightTask Graph API 首次保存图快照时不接受 expectedRevision", (
     title: "首次保存 revision 约束",
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_first_revision", {
         expectedRevision: 1,
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "首次保存图快照时不应传 expectedRevision");
-      assert.equal(error.details?.planId, "plan_graph_first_revision");
-      return true;
+    {
+      code: "VALIDATION_ERROR",
+      message: "首次保存图快照时不应传 expectedRevision",
+      details: {
+        planId: "plan_graph_first_revision",
+      },
     },
   );
 });
@@ -445,18 +491,18 @@ test("LightTask Graph API 更新图快照时 expectedRevision 为必填字段", 
     edges: [],
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_need_revision", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "更新图快照时 expectedRevision 为必填字段");
-      assert.equal(error.details?.planId, "plan_graph_need_revision");
-      return true;
+    {
+      code: "VALIDATION_ERROR",
+      message: "更新图快照时 expectedRevision 为必填字段",
+      details: {
+        planId: "plan_graph_need_revision",
+      },
     },
   );
 });
@@ -468,7 +514,7 @@ test("LightTask Graph API 会拒绝非法 DAG 图结构", () => {
     title: "非法图校验",
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_invalid", {
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
@@ -476,12 +522,12 @@ test("LightTask Graph API 会拒绝非法 DAG 图结构", () => {
           { id: "edge_1", fromNodeId: "node_1", toNodeId: "node_missing", kind: "depends_on" },
         ],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "图结构校验失败");
-      assert.ok(Array.isArray(error.details?.errors));
-      return true;
+    {
+      code: "VALIDATION_ERROR",
+      message: "图结构校验失败",
+      verify(error) {
+        assert.ok(Array.isArray(error.details?.errors));
+      },
     },
   );
 });
@@ -534,15 +580,9 @@ test("LightTask Graph API 在端口直接抛出原生异常时会归一化为 Li
     title: "图读取异常",
   });
 
-  assert.throws(
+  expectInvariantViolationFromTypeError(
     () => lighttask.getGraph("plan_graph_error"),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "INVARIANT_VIOLATION");
-      assert.equal(error.coreError.message, "图仓储 get 异常");
-      assert.equal(error.details?.originalErrorName, "TypeError");
-      return true;
-    },
+    "图仓储 get 异常",
   );
 });
 
@@ -562,18 +602,11 @@ test("LightTask Graph API 在 saveGraph 读取计划时若端口抛原生异常�
     },
   });
 
-  assert.throws(
-    () =>
-      lighttask.saveGraph("plan_graph_plan_get_error", {
-        nodes: [],
-        edges: [],
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "INVARIANT_VIOLATION");
-      assert.equal(error.details?.originalErrorName, "TypeError");
-      return true;
-    },
+  expectInvariantViolationFromTypeError(() =>
+    lighttask.saveGraph("plan_graph_plan_get_error", {
+      nodes: [],
+      edges: [],
+    }),
   );
 });
 
@@ -603,18 +636,11 @@ test("LightTask Graph API 在 saveGraph 读取图快照时若端口抛原生异�
     title: "图写前读取异常",
   });
 
-  assert.throws(
-    () =>
-      lighttask.saveGraph("plan_graph_preload_error", {
-        nodes: [],
-        edges: [],
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "INVARIANT_VIOLATION");
-      assert.equal(error.details?.originalErrorName, "TypeError");
-      return true;
-    },
+  expectInvariantViolationFromTypeError(() =>
+    lighttask.saveGraph("plan_graph_preload_error", {
+      nodes: [],
+      edges: [],
+    }),
   );
 });
 
@@ -641,19 +667,13 @@ test("LightTask Graph API 在 save 写路径直接抛出原生异常时会归一
     title: "图写路径异常",
   });
 
-  assert.throws(
+  expectInvariantViolationFromTypeError(
     () =>
       lighttask.saveGraph("plan_graph_create_error", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "INVARIANT_VIOLATION");
-      assert.equal(error.coreError.message, "图仓储 create 异常");
-      assert.equal(error.details?.originalErrorName, "TypeError");
-      return true;
-    },
+    "图仓储 create 异常",
   );
 });
 
@@ -692,19 +712,21 @@ test("LightTask Graph API 在首次保存并发冲突导致 create 返回 ok:fal
     title: "图首次保存并发冲突",
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_create_conflict", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "STATE_CONFLICT");
-      assert.equal(error.coreError.message, "计划图 ID 已存在，禁止覆盖已有记录");
-      assert.equal(error.details?.planId, "plan_graph_create_conflict");
-      assert.equal(createCalled, true);
-      return true;
+    {
+      code: "STATE_CONFLICT",
+      message: "计划图 ID 已存在，禁止覆盖已有记录",
+      details: {
+        planId: "plan_graph_create_conflict",
+      },
+      verify() {
+        assert.equal(createCalled, true);
+      },
     },
   );
 });
@@ -757,19 +779,21 @@ test("LightTask Graph API 在 update 写路径 saveIfRevisionMatches 返回 REVI
     title: "图更新并发冲突",
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_graph_update_repo_revision_conflict", {
         expectedRevision: 1,
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "REVISION_CONFLICT");
-      assert.equal(error.details?.actualRevision, 2);
-      assert.equal(saveCalled, true);
-      return true;
+    {
+      code: "REVISION_CONFLICT",
+      details: {
+        actualRevision: 2,
+      },
+      verify() {
+        assert.equal(saveCalled, true);
+      },
     },
   );
 });
@@ -804,20 +828,14 @@ test("LightTask Graph API 在 update 写路径 saveIfRevisionMatches 抛原生�
     title: "图更新异常",
   });
 
-  assert.throws(
+  expectInvariantViolationFromTypeError(
     () =>
       lighttask.saveGraph("plan_graph_update_error", {
         expectedRevision: 1,
         nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "INVARIANT_VIOLATION");
-      assert.equal(error.coreError.message, "图仓储 saveIfRevisionMatches 异常");
-      assert.equal(error.details?.originalErrorName, "TypeError");
-      return true;
-    },
+    "图仓储 saveIfRevisionMatches 异常",
   );
 });
 
@@ -894,24 +912,7 @@ test("LightTask Graph API 在注入坏依赖时会逐项报告缺失 graph 端�
     },
   ];
 
-  for (const invalidCase of invalidOptionsCases) {
-    const lighttask = createLightTask({
-      ...createTestLightTaskOptions(),
-      ...invalidCase.options,
-    });
-
-    assert.throws(
-      () => invalidCase.invoke(lighttask),
-      (error) => {
-        assert.ok(error instanceof LightTaskError);
-        assert.equal(error.code, "VALIDATION_ERROR");
-        assert.equal(error.coreError.message, `${invalidCase.name} 必须是函数`);
-        assert.equal(error.details?.path, invalidCase.name);
-        return true;
-      },
-      `${invalidCase.name} 在对应 API 调用时应报对应 path`,
-    );
-  }
+  assertInvalidDependencyCases(invalidOptionsCases);
 });
 
 test("LightTask Graph API 在 saveGraph 注入坏依赖时仍会抛出统一校验错误", () => {
@@ -924,18 +925,18 @@ test("LightTask Graph API 在 saveGraph 注入坏依赖时仍会抛出统一校�
     },
   });
 
-  assert.throws(
+  expectLightTaskError(
     () =>
       lighttask.saveGraph("plan_invalid_probe_dependency", {
         nodes: [],
         edges: [],
       }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "planRepository.get 必须是函数");
-      assert.equal(error.details?.path, "planRepository.get");
-      return true;
+    {
+      code: "VALIDATION_ERROR",
+      message: "planRepository.get 必须是函数",
+      details: {
+        path: "planRepository.get",
+      },
     },
   );
 });
