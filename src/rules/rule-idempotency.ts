@@ -1,5 +1,5 @@
-import type { CoreError } from "../data-structures/ds-error";
-import { createCoreError } from "../data-structures/ds-error";
+import type { CoreError } from "../data-structures";
+import { createCoreError } from "../data-structures";
 
 export type IdempotencyDecisionType = "proceed" | "replay" | "conflict";
 

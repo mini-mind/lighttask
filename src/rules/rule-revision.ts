@@ -1,4 +1,4 @@
-import { createCoreError, throwCoreError } from "../data-structures/ds-error";
+import { createCoreError, throwCoreError } from "../data-structures";
 
 function assertPositiveInteger(value: number, fieldName: string): void {
   if (!Number.isInteger(value) || value < 1) {

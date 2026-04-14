@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {
   LightTaskError,
-  createLightTask,
   type LightTaskGraph,
   type LightTaskPlan,
   type LightTaskTask,
+  createLightTask,
 } from "../index";
 import {
   createInMemoryGraphRepository,

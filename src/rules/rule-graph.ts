@@ -1,6 +1,5 @@
-import type { CoreError } from "../data-structures/ds-error";
-import { createCoreError, throwCoreError } from "../data-structures/ds-error";
-import type { GraphEdgeRecord, GraphSnapshot } from "../data-structures/ds-graph";
+import type { CoreError, GraphEdgeRecord, GraphSnapshot } from "../data-structures";
+import { createCoreError, throwCoreError } from "../data-structures";
 
 export interface NormalizedDagEdge {
   prerequisiteNodeId: string;
