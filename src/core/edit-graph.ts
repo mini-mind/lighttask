@@ -3,6 +3,7 @@ import {
   applyGraphEditOperations,
   assertExpectedRevision,
   assertNextRevision,
+  normalizeGraphEditOperations,
   validateDagSnapshot,
 } from "../rules";
 import { toPublicGraph } from "./graph-snapshot";
@@ -82,7 +83,8 @@ export function editGraphUseCase(
   assertExpectedRevision(storedGraph.revision, input.expectedRevision);
   assertNextRevision(storedGraph.revision, storedGraph.revision + 1);
 
-  const edited = applyGraphEditOperations(storedGraph, input.operations);
+  const normalizedOperations = normalizeGraphEditOperations(input.operations);
+  const edited = applyGraphEditOperations(storedGraph, normalizedOperations);
   const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const nextRevision = bumpRevision(storedGraph, clockNow(), normalizedIdempotencyKey);

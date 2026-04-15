@@ -97,6 +97,43 @@ function createReadyPlanWithPublishedGraph(planId: string) {
   return lighttask;
 }
 
+function createExpectedMaterializedTaskProvenance(input: {
+  graphRevision: number;
+  nodeId: string;
+  nodeTaskId: string;
+  governanceState?: "active" | "orphaned";
+  orphanedAtGraphRevision?: number;
+}) {
+  if (input.governanceState === "orphaned") {
+    return {
+      kind: "materialized_plan_task" as const,
+      source: {
+        graphScope: "published" as const,
+        graphRevision: input.graphRevision,
+        nodeId: input.nodeId,
+        nodeTaskId: input.nodeTaskId,
+      },
+      governance: {
+        state: "orphaned" as const,
+        orphanedAtGraphRevision: input.orphanedAtGraphRevision,
+      },
+    };
+  }
+
+  return {
+    kind: "materialized_plan_task" as const,
+    source: {
+      graphScope: "published" as const,
+      graphRevision: input.graphRevision,
+      nodeId: input.nodeId,
+      nodeTaskId: input.nodeTaskId,
+    },
+    governance: {
+      state: "active" as const,
+    },
+  };
+}
+
 test("LightTask Launch API 会先物化已发布图再确认计划", () => {
   const lighttask = createReadyPlanWithPublishedGraph("plan_launch_success");
 
@@ -112,15 +149,14 @@ test("LightTask Launch API 会先物化已发布图再确认计划", () => {
   assert.equal(result.tasks.length, 1);
   assert.equal(result.tasks[0].title, "任务一");
   assert.equal(result.tasks[0].status, "queued");
-  assert.deepEqual(result.tasks[0].extensions?.namespaces?.lighttask, {
-    kind: "materialized_plan_task",
-    source: {
-      graphScope: "published",
+  assert.deepEqual(
+    result.tasks[0].extensions?.namespaces?.lighttask,
+    createExpectedMaterializedTaskProvenance({
       graphRevision: 1,
       nodeId: "node_launch_1",
       nodeTaskId: "graph_task_launch_1",
-    },
-  });
+    }),
+  );
   assert.equal(lighttask.getPlan("plan_launch_success")?.status, "confirmed");
   assert.equal(lighttask.listTasksByPlan("plan_launch_success").length, 1);
 });
@@ -308,15 +344,11 @@ test("LightTask Launch API 返回结果与内部计划图任务快照隔离", ()
     properties: { priority: "p1" },
     namespaces: {
       planner: { source: "graph" },
-      lighttask: {
-        kind: "materialized_plan_task",
-        source: {
-          graphScope: "published",
-          graphRevision: 1,
-          nodeId: "node_launch_1",
-          nodeTaskId: "graph_task_launch_1",
-        },
-      },
+      lighttask: createExpectedMaterializedTaskProvenance({
+        graphRevision: 1,
+        nodeId: "node_launch_1",
+        nodeTaskId: "graph_task_launch_1",
+      }),
     },
   });
 });
@@ -365,5 +397,15 @@ test("LightTask Launch API 默认沿用 keep 治理策略", () => {
   assert.equal(
     listed.some((task) => task.title === "任务 B"),
     true,
+  );
+  assert.deepEqual(
+    listed.find((task) => task.title === "任务 B")?.extensions?.namespaces?.lighttask,
+    createExpectedMaterializedTaskProvenance({
+      graphRevision: 1,
+      nodeId: "node_b",
+      nodeTaskId: "graph_task_b",
+      governanceState: "orphaned",
+      orphanedAtGraphRevision: 2,
+    }),
   );
 });

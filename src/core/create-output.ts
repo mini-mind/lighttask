@@ -5,6 +5,7 @@ import {
   throwLightTaskError,
 } from "./lighttask-error";
 import { publishOutputCreatedEvent, resolveNotifyPublisher } from "./notify-event";
+import { normalizeOutputItems } from "./output-items";
 import { toPublicOutput } from "./output-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -106,6 +107,7 @@ export function createOutputUseCase(
     runtimeRef: normalizeOutputRuntimeRef(input.runtimeRef),
     ownerRef: normalizeOutputOwnerRef(input.ownerRef),
     payload: input.payload,
+    items: normalizeOutputItems(input.items),
     metadata: input.metadata,
     extensions: input.extensions,
     idempotencyKey: input.idempotencyKey,

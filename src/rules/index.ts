@@ -41,6 +41,7 @@ export type {
 export {
   applyGraphEditOperations,
   findReadyNodeIds,
+  normalizeGraphEditOperations,
   topologicalSort,
   validateDagSnapshot,
 } from "./rule-graph";

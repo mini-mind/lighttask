@@ -5,19 +5,17 @@ import {
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import { readMaterializedTaskProvenance } from "./materialized-task-governance";
 import type {
   CreateLightTaskOptions,
   GetPlanSchedulingFactsInput,
   GetPlanSchedulingFactsResult,
-  MaterializedPlanTaskProvenance,
   PersistedLightTask,
   PlanSchedulingBlockReason,
   SchedulingFactUnmetPrerequisite,
 } from "./types";
 
 const PUBLISHED_GRAPH_SCOPE = "published" as const;
-const MATERIALIZE_NAMESPACE = "lighttask";
-const MATERIALIZE_KIND = "materialized_plan_task" as const;
 
 function assertPlanId(planId: string): string {
   const normalizedPlanId = planId.trim();
@@ -63,42 +61,6 @@ function assertExpectedPublishedGraphRevision(
   }
 }
 
-function readMaterializedTaskProvenance(
-  task: PersistedLightTask,
-): MaterializedPlanTaskProvenance | undefined {
-  const namespaceValue = task.extensions?.namespaces?.[MATERIALIZE_NAMESPACE];
-  if (typeof namespaceValue !== "object" || namespaceValue === null) {
-    return undefined;
-  }
-
-  const candidate = namespaceValue as Partial<MaterializedPlanTaskProvenance>;
-  if (candidate.kind !== MATERIALIZE_KIND) {
-    return undefined;
-  }
-
-  const source = candidate.source;
-  if (
-    typeof source !== "object" ||
-    source === null ||
-    source.graphScope !== PUBLISHED_GRAPH_SCOPE ||
-    !Number.isInteger(source.graphRevision) ||
-    typeof source.nodeId !== "string" ||
-    typeof source.nodeTaskId !== "string"
-  ) {
-    return undefined;
-  }
-
-  return {
-    kind: MATERIALIZE_KIND,
-    source: {
-      graphScope: PUBLISHED_GRAPH_SCOPE,
-      graphRevision: source.graphRevision,
-      nodeId: source.nodeId,
-      nodeTaskId: source.nodeTaskId,
-    },
-  };
-}
-
 function mapMaterializedTasksByNodeId(
   tasks: PersistedLightTask[],
   planId: string,
@@ -112,6 +74,10 @@ function mapMaterializedTasksByNodeId(
 
     const provenance = readMaterializedTaskProvenance(task);
     if (!provenance) {
+      continue;
+    }
+
+    if (provenance.governance?.state === "orphaned") {
       continue;
     }
 

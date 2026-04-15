@@ -7,6 +7,12 @@ import {
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import {
+  MATERIALIZED_TASK_NAMESPACE,
+  createActiveMaterializedTaskProvenance,
+  createOrphanedMaterializedTaskProvenance,
+  readMaterializedTaskProvenance,
+} from "./materialized-task-governance";
 import { publishPlanTasksMaterializedEvent, resolveNotifyPublisher } from "./notify-event";
 import { toPublicPlan } from "./plan-snapshot";
 import { clonePersistedTask, createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
@@ -20,8 +26,6 @@ import type {
 } from "./types";
 
 const PUBLISHED_GRAPH_SCOPE = "published" as const;
-const MATERIALIZE_NAMESPACE = "lighttask";
-const MATERIALIZE_KIND = "materialized_plan_task" as const;
 const DEFAULT_REMOVED_NODE_POLICY = "keep" as const;
 const MATERIALIZED_TASK_SYNC_BOUNDARY = {
   // 这些字段由已发布图定义，重复物化时允许被结构性覆盖。
@@ -102,58 +106,6 @@ function resolveRemovedNodePolicy(input: MaterializePlanTasksInput): Materialize
   return removedNodePolicy;
 }
 
-function createMaterializedTaskProvenance(
-  graphRevision: number,
-  nodeId: string,
-  nodeTaskId: string,
-): MaterializedPlanTaskProvenance {
-  return {
-    kind: MATERIALIZE_KIND,
-    source: {
-      graphScope: PUBLISHED_GRAPH_SCOPE,
-      graphRevision,
-      nodeId,
-      nodeTaskId,
-    },
-  };
-}
-
-function readMaterializedTaskProvenance(
-  task: PersistedLightTask,
-): MaterializedPlanTaskProvenance | undefined {
-  const namespaceValue = task.extensions?.namespaces?.[MATERIALIZE_NAMESPACE];
-  if (typeof namespaceValue !== "object" || namespaceValue === null) {
-    return undefined;
-  }
-
-  const candidate = namespaceValue as Partial<MaterializedPlanTaskProvenance>;
-  if (candidate.kind !== MATERIALIZE_KIND) {
-    return undefined;
-  }
-
-  const source = candidate.source;
-  if (
-    typeof source !== "object" ||
-    source === null ||
-    source.graphScope !== PUBLISHED_GRAPH_SCOPE ||
-    !Number.isInteger(source.graphRevision) ||
-    typeof source.nodeId !== "string" ||
-    typeof source.nodeTaskId !== "string"
-  ) {
-    return undefined;
-  }
-
-  return {
-    kind: MATERIALIZE_KIND,
-    source: {
-      graphScope: PUBLISHED_GRAPH_SCOPE,
-      graphRevision: source.graphRevision,
-      nodeId: source.nodeId,
-      nodeTaskId: source.nodeTaskId,
-    },
-  };
-}
-
 function buildMaterializedTaskExtensions(
   extensions: PersistedLightTask["extensions"],
   provenance: MaterializedPlanTaskProvenance,
@@ -165,7 +117,7 @@ function buildMaterializedTaskExtensions(
     ...nextExtensions,
     namespaces: {
       ...nextNamespaces,
-      [MATERIALIZE_NAMESPACE]: provenance,
+      [MATERIALIZED_TASK_NAMESPACE]: provenance,
     },
   };
 }
@@ -249,8 +201,49 @@ function finalizeMaterializedTasksResult(
 ): MaterializePlanTasksResult["tasks"] {
   switch (removedNodePolicy) {
     case "keep":
-      // keep 策略只返回当前已发布图仍存在的节点；已移除节点对应旧任务继续留在仓储中。
+      // keep 策略下，返回结果只包含当前图上的 active 任务；
+      // 已移除节点对应旧任务继续保留，但会被显式标记为 orphaned。
       return tasks;
+  }
+}
+
+function markRemovedMaterializedTasksAsOrphaned(input: {
+  options: CreateLightTaskOptions;
+  tasksByNodeId: ReadonlyMap<string, PersistedLightTask>;
+  publishedNodeIds: ReadonlySet<string>;
+  publishedGraphRevision: number;
+}): void {
+  const saveIfRevisionMatches = requireLightTaskFunction(
+    input.options.taskRepository?.saveIfRevisionMatches,
+    "taskRepository.saveIfRevisionMatches",
+  );
+
+  for (const [nodeId, task] of input.tasksByNodeId.entries()) {
+    if (input.publishedNodeIds.has(nodeId)) {
+      continue;
+    }
+
+    const provenance = readMaterializedTaskProvenance(task);
+    if (!provenance || provenance.governance?.state === "orphaned") {
+      continue;
+    }
+
+    const nextExtensions = buildMaterializedTaskExtensions(
+      task.extensions,
+      createOrphanedMaterializedTaskProvenance(provenance, input.publishedGraphRevision),
+    );
+    if (isDeepStrictEqual(task.extensions, nextExtensions)) {
+      continue;
+    }
+
+    const nextTask = clonePersistedTask(task);
+    nextTask.extensions = nextExtensions;
+    nextTask.revision = task.revision + 1;
+
+    const saved = saveIfRevisionMatches(nextTask, task.revision);
+    if (!saved.ok) {
+      throwLightTaskError(saved.error);
+    }
   }
 }
 
@@ -290,6 +283,7 @@ export function materializePlanTasksUseCase(
   );
 
   const nodesById = new Map(publishedGraph.nodes.map((node) => [node.id, node]));
+  const publishedNodeIds = new Set(publishedGraph.nodes.map((node) => node.id));
   const orderedNodeIds = topologicalSort(publishedGraph);
   const tasksByNodeId = mapMaterializedTasksByNodeId(listTasks(), normalizedPlanId);
   const materializedTasks: MaterializePlanTasksResult["tasks"] = [];
@@ -308,7 +302,7 @@ export function materializePlanTasksUseCase(
       metadata: cloneOptional(node.metadata),
       extensions: buildMaterializedTaskExtensions(
         node.extensions,
-        createMaterializedTaskProvenance(publishedGraph.revision, node.id, node.taskId),
+        createActiveMaterializedTaskProvenance(publishedGraph.revision, node.id, node.taskId),
       ),
     } satisfies MaterializedTaskSyncableFields;
     const existedTask = tasksByNodeId.get(node.id);
@@ -377,6 +371,13 @@ export function materializePlanTasksUseCase(
 
     materializedTasks.push(toPublicTask(saved.task));
   }
+
+  markRemovedMaterializedTasksAsOrphaned({
+    options,
+    tasksByNodeId,
+    publishedNodeIds,
+    publishedGraphRevision: publishedGraph.revision,
+  });
 
   const result = {
     plan: toPublicPlan(storedPlan),

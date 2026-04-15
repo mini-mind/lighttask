@@ -48,7 +48,19 @@ function createSchedulingTestTaskFixture(input: {
   nodeId: string;
   nodeTaskId: string;
   status: TaskRecordFixture["status"];
+  governanceState?: "active" | "orphaned";
+  orphanedAtGraphRevision?: number;
 }): TaskRecordFixture {
+  const governance =
+    input.governanceState === "orphaned"
+      ? {
+          state: "orphaned" as const,
+          orphanedAtGraphRevision: input.orphanedAtGraphRevision,
+        }
+      : {
+          state: "active" as const,
+        };
+
   return {
     id: input.id,
     planId: input.planId,
@@ -67,6 +79,7 @@ function createSchedulingTestTaskFixture(input: {
             nodeId: input.nodeId,
             nodeTaskId: input.nodeTaskId,
           },
+          governance,
         },
       },
     },
@@ -241,6 +254,54 @@ test("LightTask Scheduling Facts API 返回稳定顺序、节点分类与显式�
     taskStatus: "dispatched",
   });
   assert.equal(lighttask.listTasksByPlan("plan_scheduling_facts").length, beforeTaskCount);
+});
+
+test("LightTask Scheduling Facts API 会忽略 orphaned 物化任务", () => {
+  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
+  const created = taskRepository.create(
+    createSchedulingTestTaskFixture({
+      id: "task_node_orphaned",
+      planId: "plan_scheduling_orphaned",
+      nodeId: "node_orphaned",
+      nodeTaskId: "graph_task_orphaned_v1",
+      status: "completed",
+      governanceState: "orphaned",
+      orphanedAtGraphRevision: 2,
+    }),
+  );
+  assert.equal(created.ok, true);
+
+  const lighttask = createLightTask(createTestLightTaskOptions({ taskRepository }));
+  lighttask.createPlan({
+    id: "plan_scheduling_orphaned",
+    title: "忽略孤儿任务",
+  });
+  lighttask.saveGraph("plan_scheduling_orphaned", {
+    nodes: [{ id: "node_orphaned", taskId: "graph_task_orphaned_v2", label: "任务孤儿" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_scheduling_orphaned", {
+    expectedRevision: 1,
+  });
+
+  const facts = lighttask.getPlanSchedulingFacts("plan_scheduling_orphaned", {
+    expectedPublishedGraphRevision: 1,
+  });
+
+  assert.deepEqual(facts.readyNodeIds, ["node_orphaned"]);
+  assert.deepEqual(facts.completedNodeIds, []);
+  assert.deepEqual(facts.byNodeId.node_orphaned, {
+    nodeId: "node_orphaned",
+    graphTaskId: "graph_task_orphaned_v2",
+    taskId: undefined,
+    taskStatus: undefined,
+    isReady: true,
+    isRunnable: false,
+    isTerminal: false,
+    blockReason: {
+      code: "missing_task",
+    },
+  });
 });
 
 test("LightTask Scheduling Facts API 在已发布图 revision 不匹配时返回 REVISION_CONFLICT", () => {

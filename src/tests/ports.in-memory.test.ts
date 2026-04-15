@@ -128,6 +128,17 @@ function createOutput(outputId: string, revision = 1): OutputRecord {
       id: "task_1",
     },
     payload: { content: { text: "draft" } },
+    items: [
+      {
+        id: "artifact_1",
+        kind: "text",
+        status: "declared",
+        metadata: { owner: { name: "tester" } },
+        extensions: {
+          namespaces: { outputItem: { lane: "core" } },
+        },
+      },
+    ],
     metadata: { owner: { name: "tester" } },
     extensions: {
       properties: { priority: "p1" },
@@ -691,21 +702,49 @@ test("端口层 in-memory：output create/get/list 返回快照并与内部状�
   created.output.payload = { content: { text: "mutated" } };
   assert.ok(created.output.metadata);
   created.output.metadata.owner = { name: "mutated" };
+  assert.ok(created.output.items);
+  created.output.items[0].status = "mutated";
+  assert.ok(created.output.items[0].metadata);
+  created.output.items[0].metadata.owner = { name: "mutated" };
 
   const fetched = repository.get("output_repo_1");
   assert.ok(fetched);
   assert.equal(fetched.kind, "summary");
   assert.deepEqual(fetched.payload, { content: { text: "draft" } });
+  assert.deepEqual(fetched.items, [
+    {
+      id: "artifact_1",
+      kind: "text",
+      status: "declared",
+      metadata: { owner: { name: "tester" } },
+      extensions: {
+        namespaces: { outputItem: { lane: "core" } },
+      },
+    },
+  ]);
   assert.deepEqual(fetched.metadata, { owner: { name: "tester" } });
 
   const listed = repository.list();
   listed[0].status = "sealed";
   listed[0].runtimeRef = { id: "runtime_mutated" };
+  assert.ok(listed[0].items);
+  listed[0].items[0].kind = "mutated";
 
   const refetched = repository.get("output_repo_1");
   assert.ok(refetched);
   assert.equal(refetched.status, "open");
   assert.deepEqual(refetched.runtimeRef, { id: "runtime_1" });
+  assert.deepEqual(refetched.items, [
+    {
+      id: "artifact_1",
+      kind: "text",
+      status: "declared",
+      metadata: { owner: { name: "tester" } },
+      extensions: {
+        namespaces: { outputItem: { lane: "core" } },
+      },
+    },
+  ]);
 });
 
 test("端口层 in-memory：output create 后外部篡改原入参不会污染仓储", () => {
@@ -720,11 +759,24 @@ test("端口层 in-memory：output create 后外部篡改原入参不会污染�
 
   original.kind = "外部修改原入参";
   original.payload = { content: { text: "changed" } };
+  assert.ok(original.items);
+  original.items[0].label = "changed";
 
   const fetched = repository.get("output_input_create");
   assert.ok(fetched);
   assert.equal(fetched.kind, "summary");
   assert.deepEqual(fetched.payload, { content: { text: "draft" } });
+  assert.deepEqual(fetched.items, [
+    {
+      id: "artifact_1",
+      kind: "text",
+      status: "declared",
+      metadata: { owner: { name: "tester" } },
+      extensions: {
+        namespaces: { outputItem: { lane: "core" } },
+      },
+    },
+  ]);
 });
 
 test("端口层 in-memory：output saveIfRevisionMatches 在 revision 冲突时返回 REVISION_CONFLICT", () => {

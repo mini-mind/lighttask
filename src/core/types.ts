@@ -3,6 +3,8 @@ import type {
   DomainEventType,
   GraphEdgeRecord,
   GraphNodeRecord,
+  OutputItemRecord,
+  OutputItemStatus,
   OutputLifecycleStatus,
   OutputOwnerRef,
   OutputRuntimeRef,
@@ -103,12 +105,19 @@ export interface LightTaskOutput {
   runtimeRef?: OutputRuntimeRef;
   ownerRef?: OutputOwnerRef;
   payload?: Record<string, unknown>;
+  items?: LightTaskOutputItem[];
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
   idempotencyKey?: string;
 }
+
+export type LightTaskOutputItem = OutputItemRecord;
+export interface LightTaskOutputItemInput extends Omit<OutputItemRecord, "status"> {
+  status?: OutputItemStatus;
+}
+export type LightTaskOutputItemStatus = OutputItemStatus;
 
 export interface PersistedLightTask extends LightTaskTask {
   lastAdvanceFingerprint?: string;
@@ -154,6 +163,7 @@ export interface CreateOutputInput {
   runtimeRef?: OutputRuntimeRef;
   ownerRef?: OutputOwnerRef;
   payload?: Record<string, unknown>;
+  items?: LightTaskOutputItemInput[];
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
   idempotencyKey?: string;
@@ -180,6 +190,7 @@ export interface AdvanceOutputInput {
   expectedRevision: number;
   status?: OutputLifecycleStatus;
   payload?: Record<string, unknown> | null;
+  items?: LightTaskOutputItemInput[] | null;
   idempotencyKey?: string;
 }
 
@@ -216,9 +227,20 @@ export interface MaterializedPlanTaskSource extends Record<string, unknown> {
   nodeTaskId: string;
 }
 
+export type MaterializedPlanTaskGovernance =
+  | {
+      state: "active";
+      orphanedAtGraphRevision?: undefined;
+    }
+  | {
+      state: "orphaned";
+      orphanedAtGraphRevision: number;
+    };
+
 export interface MaterializedPlanTaskProvenance extends Record<string, unknown> {
   kind: "materialized_plan_task";
   source: MaterializedPlanTaskSource;
+  governance?: MaterializedPlanTaskGovernance;
 }
 
 export type MaterializeRemovedNodePolicy = "keep";
@@ -227,7 +249,8 @@ export interface MaterializePlanTasksInput {
   expectedPublishedGraphRevision: number;
   /**
    * 首个治理切片只显式支持 keep：
-   * 已从当前已发布图移除的旧物化任务继续保留在仓储中，但不会出现在本次物化返回结果里。
+   * 已从当前已发布图移除的旧物化任务继续保留在仓储中，
+   * 并被标记为 orphaned，但不会出现在本次物化返回结果里。
    */
   removedNodePolicy?: MaterializeRemovedNodePolicy;
 }

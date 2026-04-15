@@ -7,6 +7,7 @@ import {
   throwLightTaskError,
 } from "./lighttask-error";
 import { publishOutputAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
+import { normalizeOutputItems } from "./output-items";
 import { clonePersistedOutput, toPublicOutput } from "./output-snapshot";
 import type {
   AdvanceOutputInput,
@@ -79,13 +80,18 @@ export function advanceOutputUseCase(
 
   const nextStatus = input.status ?? "sealed";
   const payloadProvided = hasOwnField(input, "payload");
+  const itemsProvided = hasOwnField(input, "items");
 
   // 显式阻止无变化推进，避免 output revision 被当作无意义心跳滥用。
-  if (!payloadProvided && nextStatus === output.status) {
+  if (!payloadProvided && !itemsProvided && nextStatus === output.status) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "推进输出至少需要提供 payload 或 status 变更", {
-        outputId: normalizedOutputId,
-      }),
+      createLightTaskError(
+        "VALIDATION_ERROR",
+        "推进输出至少需要提供 payload、items 或 status 变更",
+        {
+          outputId: normalizedOutputId,
+        },
+      ),
     );
   }
 
@@ -94,6 +100,8 @@ export function advanceOutputUseCase(
     ...output,
     status: nextStatus,
     payload: payloadProvided ? cloneOptional(input.payload ?? undefined) : output.payload,
+    // items 首切片只支持整字段替换，避免在聚合层引入局部 patch 协议。
+    items: itemsProvided ? normalizeOutputItems(input.items) : output.items,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,

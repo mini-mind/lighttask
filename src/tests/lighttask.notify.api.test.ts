@@ -293,9 +293,22 @@ test("LightTask Notify API 在 output create/advance 成功后发布事件", () 
     runtimeRef: {
       id: "runtime_notify_only_ref",
     },
+    items: [
+      {
+        id: " artifact_created ",
+        kind: " text ",
+      },
+    ],
   });
   lighttask.advanceOutput("output_notify", {
     expectedRevision: 1,
+    items: [
+      {
+        id: "artifact_advanced",
+        kind: "structured",
+        status: "ready",
+      },
+    ],
   });
 
   const events = notify.listPublished();
@@ -305,8 +318,40 @@ test("LightTask Notify API 在 output create/advance 成功后发布事件", () 
   );
   assert.equal(events[0].aggregate, "output");
   assert.equal(events[0].aggregateId, "output_notify");
+  const createdEvent = getEventByType(events, "output.created");
   const advancedEvent = getEventByType(events, "output.advanced");
+  assert.deepEqual(createdEvent.payload.output.items, [
+    {
+      id: "artifact_created",
+      kind: "text",
+      status: "declared",
+    },
+  ]);
   assert.equal(advancedEvent.payload.output.status, "sealed");
+  assert.deepEqual(advancedEvent.payload.output.items, [
+    {
+      id: "artifact_advanced",
+      kind: "structured",
+      status: "ready",
+    },
+  ]);
+
+  advancedEvent.payload.output.items = [
+    {
+      id: "artifact_mutated",
+      kind: "broken",
+      status: "mutated",
+    },
+  ];
+  const secondRead = notify.listPublished();
+  const advancedEventSecondRead = getEventByType(secondRead, "output.advanced");
+  assert.deepEqual(advancedEventSecondRead.payload.output.items, [
+    {
+      id: "artifact_advanced",
+      kind: "structured",
+      status: "ready",
+    },
+  ]);
 });
 
 test("LightTask Notify API 在 launchPlan 期间按顺序发布 plan 编排事件", () => {

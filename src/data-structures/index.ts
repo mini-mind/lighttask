@@ -52,8 +52,10 @@ export { createRuntimeRecord } from "./ds-runtime";
 
 export type {
   OutputLifecycleStatus,
+  OutputItemStatus,
   OutputRuntimeRef,
   OutputOwnerRef,
+  OutputItemRecord,
   OutputRecord,
   CreateOutputRecordInput,
 } from "./ds-output";

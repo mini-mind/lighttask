@@ -516,6 +516,175 @@ test("LightTask Graph API 增量编辑后会在保存前校验结果 DAG", () =>
   assert.equal(draftAfterFailure.edges.length, 1);
 });
 
+test("LightTask Graph API 增量编辑前会标准化 patch 输入并按标准化结果持久化", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_normalize_patch",
+    title: "图编辑 patch 标准化",
+  });
+  lighttask.saveGraph("plan_graph_edit_normalize_patch", {
+    nodes: [
+      { id: "node_1", taskId: "task_1", label: "节点一" },
+      { id: "node_legacy", taskId: "task_legacy", label: "旧节点" },
+    ],
+    edges: [{ id: "edge_legacy", fromNodeId: "node_legacy", toNodeId: "node_1", kind: "blocks" }],
+  });
+
+  const edited = lighttask.editGraph("plan_graph_edit_normalize_patch", {
+    expectedRevision: 1,
+    operations: [
+      { type: "remove_edge", edgeId: " edge_legacy " },
+      { type: "remove_node", nodeId: " node_legacy " },
+      {
+        type: "upsert_node",
+        node: { id: " node_2 ", taskId: " task_2 ", label: " 节点二 " },
+      },
+      {
+        type: "upsert_edge",
+        edge: {
+          id: " edge_1 ",
+          fromNodeId: " node_1 ",
+          toNodeId: " node_2 ",
+          kind: "blocks",
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    edited.nodes.map((node) => ({ id: node.id, taskId: node.taskId, label: node.label })),
+    [
+      { id: "node_1", taskId: "task_1", label: "节点一" },
+      { id: "node_2", taskId: "task_2", label: "节点二" },
+    ],
+  );
+  assert.deepEqual(edited.edges, [
+    { id: "edge_1", fromNodeId: "node_1", toNodeId: "node_2", kind: "blocks" },
+  ]);
+
+  const stored = lighttask.getGraph("plan_graph_edit_normalize_patch");
+  assert.ok(stored);
+  assert.deepEqual(
+    stored.nodes.map((node) => ({ id: node.id, taskId: node.taskId, label: node.label })),
+    [
+      { id: "node_1", taskId: "task_1", label: "节点一" },
+      { id: "node_2", taskId: "task_2", label: "节点二" },
+    ],
+  );
+  assert.deepEqual(stored.edges, [
+    { id: "edge_1", fromNodeId: "node_1", toNodeId: "node_2", kind: "blocks" },
+  ]);
+});
+
+test("LightTask Graph API 增量编辑时会拒绝空 operations", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_empty_operations",
+    title: "图编辑空操作",
+  });
+  lighttask.saveGraph("plan_graph_edit_empty_operations", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "节点一" }],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_empty_operations", {
+        expectedRevision: 1,
+        operations: [],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "operations 不能为空",
+      details: {
+        operationCount: 0,
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 增量编辑时会拒绝空白节点关键字段", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_invalid_node_patch",
+    title: "图编辑非法节点 patch",
+  });
+  lighttask.saveGraph("plan_graph_edit_invalid_node_patch", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "节点一" }],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_invalid_node_patch", {
+        expectedRevision: 1,
+        operations: [
+          {
+            type: "upsert_node",
+            node: { id: " node_2 ", taskId: " task_2 ", label: "   " },
+          },
+        ],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "node.label 不能为空",
+      details: {
+        operationIndex: 0,
+        operationType: "upsert_node",
+        field: "node.label",
+        value: "   ",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 增量编辑时会在补丁契约层拒绝自环边", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_self_loop_patch",
+    title: "图编辑自环 patch",
+  });
+  lighttask.saveGraph("plan_graph_edit_self_loop_patch", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "节点一" }],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_self_loop_patch", {
+        expectedRevision: 1,
+        operations: [
+          {
+            type: "upsert_edge",
+            edge: {
+              id: " edge_1 ",
+              fromNodeId: " node_1 ",
+              toNodeId: " node_1 ",
+              kind: "depends_on",
+            },
+          },
+        ],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "edge 不允许自环",
+      details: {
+        operationIndex: 0,
+        operationType: "upsert_edge",
+        edgeId: "edge_1",
+        fromNodeId: "node_1",
+        toNodeId: "node_1",
+        kind: "depends_on",
+      },
+    },
+  );
+
+  const stored = lighttask.getGraph("plan_graph_edit_self_loop_patch");
+  assert.ok(stored);
+  assert.equal(stored.revision, 1);
+  assert.deepEqual(stored.edges, []);
+});
+
 test("LightTask Graph API 支持发布草稿图并读取已发布图", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   lighttask.createPlan({

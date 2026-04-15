@@ -1,5 +1,6 @@
 import type {
   CoreError,
+  DependencyKind,
   GraphEdgeRecord,
   GraphNodeRecord,
   GraphSnapshot,
@@ -43,6 +44,8 @@ export interface GraphEditResult {
   edges: GraphEdgeRecord[];
 }
 
+const GRAPH_EDGE_KINDS: DependencyKind[] = ["depends_on", "blocks", "relates_to"];
+
 function normalizeDependencyEdge(edge: GraphEdgeRecord): NormalizedDagEdge | undefined {
   if (edge.kind === "relates_to") {
     return undefined;
@@ -69,6 +72,274 @@ function normalizeDependencyEdge(edge: GraphEdgeRecord): NormalizedDagEdge | und
 
 function createValidationError(message: string, details?: Record<string, unknown>): CoreError {
   return createCoreError("VALIDATION_ERROR", message, details);
+}
+
+function describeValueType(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+
+  if (Array.isArray(value)) {
+    return "array";
+  }
+
+  return typeof value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertRecordValue(
+  value: unknown,
+  message: string,
+  details: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throwCoreError(
+      createValidationError(message, {
+        ...details,
+        actualType: describeValueType(value),
+      }),
+    );
+  }
+
+  return value;
+}
+
+function assertNonEmptyTrimmedString(
+  value: unknown,
+  field: string,
+  details: Record<string, unknown>,
+): string {
+  if (typeof value !== "string") {
+    throwCoreError(
+      createValidationError(`${field} 必须是字符串`, {
+        ...details,
+        field,
+        actualType: describeValueType(value),
+      }),
+    );
+  }
+
+  const normalizedValue = value.trim();
+  if (!normalizedValue) {
+    throwCoreError(
+      createValidationError(`${field} 不能为空`, {
+        ...details,
+        field,
+        value,
+      }),
+    );
+  }
+
+  return normalizedValue;
+}
+
+function assertDependencyKind(value: unknown, details: Record<string, unknown>): DependencyKind {
+  if (typeof value !== "string" || !GRAPH_EDGE_KINDS.includes(value as DependencyKind)) {
+    throwCoreError(
+      createValidationError("edge.kind 非法", {
+        ...details,
+        field: "edge.kind",
+        value,
+        allowedValues: GRAPH_EDGE_KINDS,
+      }),
+    );
+  }
+
+  return value as DependencyKind;
+}
+
+function assertDistinctDestructiveTarget(
+  seenTargets: Map<string, number>,
+  targetId: string,
+  operationType: "remove_node" | "remove_edge",
+  operationIndex: number,
+): void {
+  const duplicatedWith = seenTargets.get(targetId);
+  if (duplicatedWith !== undefined) {
+    throwCoreError(
+      createValidationError(
+        operationType === "remove_node"
+          ? "同一补丁内不允许重复删除同一节点"
+          : "同一补丁内不允许重复删除同一边",
+        operationType === "remove_node"
+          ? {
+              operationIndex,
+              operationType,
+              nodeId: targetId,
+              duplicateOfOperationIndex: duplicatedWith,
+            }
+          : {
+              operationIndex,
+              operationType,
+              edgeId: targetId,
+              duplicateOfOperationIndex: duplicatedWith,
+            },
+      ),
+    );
+  }
+
+  seenTargets.set(targetId, operationIndex);
+}
+
+export function normalizeGraphEditOperations(operations: unknown): GraphEditOperation[] {
+  if (!Array.isArray(operations)) {
+    throwCoreError(
+      createValidationError("operations 必须是数组", {
+        actualType: describeValueType(operations),
+      }),
+    );
+  }
+
+  if (operations.length === 0) {
+    throwCoreError(
+      createValidationError("operations 不能为空", {
+        operationCount: 0,
+      }),
+    );
+  }
+
+  const normalizedOperations: GraphEditOperation[] = [];
+  const removedNodeIndexes = new Map<string, number>();
+  const removedEdgeIndexes = new Map<string, number>();
+
+  // 先收口补丁契约层的形状与 trim 规则，再把存在性/引用性留给顺序应用规则处理。
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = assertRecordValue(operations[index], "operation 必须是对象", {
+      operationIndex: index,
+    });
+    const operationType = operation.type;
+
+    if (
+      operationType !== "upsert_node" &&
+      operationType !== "remove_node" &&
+      operationType !== "upsert_edge" &&
+      operationType !== "remove_edge"
+    ) {
+      throwCoreError(
+        createValidationError("operation.type 非法", {
+          operationIndex: index,
+          field: "type",
+          value: operationType,
+        }),
+      );
+    }
+
+    if (operationType === "upsert_node") {
+      const node = assertRecordValue(operation.node, "node 必须是对象", {
+        operationIndex: index,
+        operationType,
+      });
+      const id = assertNonEmptyTrimmedString(node.id, "node.id", {
+        operationIndex: index,
+        operationType,
+      });
+      const taskId = assertNonEmptyTrimmedString(node.taskId, "node.taskId", {
+        operationIndex: index,
+        operationType,
+      });
+      const label = assertNonEmptyTrimmedString(node.label, "node.label", {
+        operationIndex: index,
+        operationType,
+      });
+
+      normalizedOperations.push({
+        type: operationType,
+        node: {
+          id,
+          taskId,
+          label,
+          ...(node.metadata !== undefined
+            ? { metadata: node.metadata as GraphNodeRecord["metadata"] }
+            : {}),
+          ...(node.extensions !== undefined
+            ? { extensions: node.extensions as GraphNodeRecord["extensions"] }
+            : {}),
+        },
+      });
+      continue;
+    }
+
+    if (operationType === "remove_node") {
+      const nodeId = assertNonEmptyTrimmedString(operation.nodeId, "nodeId", {
+        operationIndex: index,
+        operationType,
+      });
+      assertDistinctDestructiveTarget(removedNodeIndexes, nodeId, operationType, index);
+      normalizedOperations.push({
+        type: operationType,
+        nodeId,
+      });
+      continue;
+    }
+
+    if (operationType === "upsert_edge") {
+      const edge = assertRecordValue(operation.edge, "edge 必须是对象", {
+        operationIndex: index,
+        operationType,
+      });
+      const id = assertNonEmptyTrimmedString(edge.id, "edge.id", {
+        operationIndex: index,
+        operationType,
+      });
+      const fromNodeId = assertNonEmptyTrimmedString(edge.fromNodeId, "edge.fromNodeId", {
+        operationIndex: index,
+        operationType,
+      });
+      const toNodeId = assertNonEmptyTrimmedString(edge.toNodeId, "edge.toNodeId", {
+        operationIndex: index,
+        operationType,
+      });
+      const kind = assertDependencyKind(edge.kind, {
+        operationIndex: index,
+        operationType,
+      });
+
+      if (fromNodeId === toNodeId) {
+        throwCoreError(
+          createValidationError("edge 不允许自环", {
+            operationIndex: index,
+            operationType,
+            edgeId: id,
+            fromNodeId,
+            toNodeId,
+            kind,
+          }),
+        );
+      }
+
+      normalizedOperations.push({
+        type: operationType,
+        edge: {
+          id,
+          fromNodeId,
+          toNodeId,
+          kind,
+          ...(edge.metadata !== undefined
+            ? { metadata: edge.metadata as GraphEdgeRecord["metadata"] }
+            : {}),
+          ...(edge.extensions !== undefined
+            ? { extensions: edge.extensions as GraphEdgeRecord["extensions"] }
+            : {}),
+        },
+      });
+      continue;
+    }
+
+    const edgeId = assertNonEmptyTrimmedString(operation.edgeId, "edgeId", {
+      operationIndex: index,
+      operationType,
+    });
+    assertDistinctDestructiveTarget(removedEdgeIndexes, edgeId, operationType, index);
+    normalizedOperations.push({
+      type: operationType,
+      edgeId,
+    });
+  }
+
+  return normalizedOperations;
 }
 
 function findEdgeReferenceIds(edges: GraphEdgeRecord[], nodeId: string): string[] {

@@ -65,6 +65,43 @@ function createMaterializeTestLightTask(
   );
 }
 
+function createExpectedMaterializedTaskProvenance(input: {
+  graphRevision: number;
+  nodeId: string;
+  nodeTaskId: string;
+  governanceState?: "active" | "orphaned";
+  orphanedAtGraphRevision?: number;
+}) {
+  if (input.governanceState === "orphaned") {
+    return {
+      kind: "materialized_plan_task" as const,
+      source: {
+        graphScope: "published" as const,
+        graphRevision: input.graphRevision,
+        nodeId: input.nodeId,
+        nodeTaskId: input.nodeTaskId,
+      },
+      governance: {
+        state: "orphaned" as const,
+        orphanedAtGraphRevision: input.orphanedAtGraphRevision,
+      },
+    };
+  }
+
+  return {
+    kind: "materialized_plan_task" as const,
+    source: {
+      graphScope: "published" as const,
+      graphRevision: input.graphRevision,
+      nodeId: input.nodeId,
+      nodeTaskId: input.nodeTaskId,
+    },
+    governance: {
+      state: "active" as const,
+    },
+  };
+}
+
 test("LightTask Materialize API 只读取已发布图并按拓扑顺序创建计划任务", () => {
   const requestedScopes: Array<string | undefined> = [];
   const publishedGraph: LightTaskGraph = {
@@ -116,13 +153,11 @@ test("LightTask Materialize API 只读取已发布图并按拓扑顺序创建计
   assert.equal(result.tasks[0].id === "graph_task_b", false);
   assert.equal(result.tasks[0].planId, "plan_materialize_create");
   assert.deepEqual(result.tasks[0].extensions?.namespaces?.lighttask, {
-    kind: "materialized_plan_task",
-    source: {
-      graphScope: "published",
+    ...createExpectedMaterializedTaskProvenance({
       graphRevision: 3,
       nodeId: "node_b",
       nodeTaskId: "graph_task_b",
-    },
+    }),
   });
   assert.equal(lighttask.listTasksByPlan("plan_materialize_create").length, 2);
 });
@@ -308,13 +343,11 @@ test("LightTask Materialize API 会结构化同步物化任务且不推进运行
     presentation: { badge: "updated" },
     namespaces: {
       lighttask: {
-        kind: "materialized_plan_task",
-        source: {
-          graphScope: "published",
+        ...createExpectedMaterializedTaskProvenance({
           graphRevision: 2,
           nodeId: "node_sync",
           nodeTaskId: "graph_task_sync_v2",
-        },
+        }),
       },
     },
   });
@@ -351,13 +384,11 @@ test("LightTask Materialize API 只同步图权威字段并保护任务实例字
       properties: { priority: "p9" },
       namespaces: {
         lighttask: {
-          kind: "materialized_plan_task",
-          source: {
-            graphScope: "published",
+          ...createExpectedMaterializedTaskProvenance({
             graphRevision: 1,
             nodeId: "node_boundary",
             nodeTaskId: "graph_task_boundary_v1",
-          },
+          }),
         },
         legacy: { preserved: false },
       },
@@ -405,13 +436,11 @@ test("LightTask Materialize API 只同步图权威字段并保护任务实例字
     namespaces: {
       planner: { source: "published" },
       lighttask: {
-        kind: "materialized_plan_task",
-        source: {
-          graphScope: "published",
+        ...createExpectedMaterializedTaskProvenance({
           graphRevision: 1,
           nodeId: "node_boundary",
           nodeTaskId: "graph_task_boundary_v2",
-        },
+        }),
       },
     },
   });
@@ -484,15 +513,76 @@ test("LightTask Materialize API 不删除已从新发布图移除的旧物化任
   );
   assert.deepEqual(
     listed.find((task) => task.id === first.tasks[1].id)?.extensions?.namespaces?.lighttask,
-    {
-      kind: "materialized_plan_task",
-      source: {
-        graphScope: "published",
-        graphRevision: 1,
-        nodeId: "node_b",
-        nodeTaskId: "graph_task_b",
-      },
-    },
+    createExpectedMaterializedTaskProvenance({
+      graphRevision: 1,
+      nodeId: "node_b",
+      nodeTaskId: "graph_task_b",
+      governanceState: "orphaned",
+      orphanedAtGraphRevision: 2,
+    }),
+  );
+});
+
+test("LightTask Materialize API 在节点重新出现时复用旧任务并恢复 active 治理状态", () => {
+  const lighttask = createMaterializeTestLightTask();
+  lighttask.createPlan({
+    id: "plan_materialize_reactivate",
+    title: "重新激活旧任务",
+  });
+  lighttask.saveGraph("plan_materialize_reactivate", {
+    nodes: [{ id: "node_a", taskId: "graph_task_a_v1", label: "任务 A" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_reactivate", {
+    expectedRevision: 1,
+  });
+
+  const first = lighttask.materializePlanTasks("plan_materialize_reactivate", {
+    expectedPublishedGraphRevision: 1,
+  });
+
+  lighttask.saveGraph("plan_materialize_reactivate", {
+    expectedRevision: 1,
+    nodes: [],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_reactivate", {
+    expectedRevision: 2,
+  });
+  lighttask.materializePlanTasks("plan_materialize_reactivate", {
+    expectedPublishedGraphRevision: 2,
+    removedNodePolicy: "keep",
+  });
+
+  lighttask.saveGraph("plan_materialize_reactivate", {
+    expectedRevision: 2,
+    nodes: [{ id: "node_a", taskId: "graph_task_a_v2", label: "任务 A 回归" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_reactivate", {
+    expectedRevision: 3,
+  });
+
+  const reactivated = lighttask.materializePlanTasks("plan_materialize_reactivate", {
+    expectedPublishedGraphRevision: 3,
+    removedNodePolicy: "keep",
+  });
+
+  assert.equal(reactivated.tasks.length, 1);
+  assert.equal(reactivated.tasks[0].id, first.tasks[0].id);
+  assert.equal(reactivated.tasks[0].title, "任务 A 回归");
+  assert.deepEqual(reactivated.tasks[0].extensions?.namespaces?.lighttask, {
+    ...createExpectedMaterializedTaskProvenance({
+      graphRevision: 3,
+      nodeId: "node_a",
+      nodeTaskId: "graph_task_a_v2",
+    }),
+  });
+  assert.equal(
+    lighttask
+      .listTasksByPlan("plan_materialize_reactivate")
+      .filter((task) => task.id === first.tasks[0].id).length,
+    1,
   );
 });
 
