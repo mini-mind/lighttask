@@ -10,6 +10,7 @@ import {
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import { publishTaskAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
 import { applyTaskStepProgress } from "./task-progress";
 import { buildAdvanceFingerprint, clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type { AdvanceTaskInput, CreateLightTaskOptions, LightTaskTask } from "./types";
@@ -33,6 +34,7 @@ export function advanceTaskUseCase(
   taskId: string,
   input: AdvanceTaskInput,
 ): LightTaskTask {
+  const publishEvent = resolveNotifyPublisher(options);
   const getTask = requireLightTaskFunction(options.taskRepository?.get, "taskRepository.get");
   const saveIfRevisionMatches = requireLightTaskFunction(
     options.taskRepository?.saveIfRevisionMatches,
@@ -109,5 +111,7 @@ export function advanceTaskUseCase(
   }
 
   // 保存成功后统一返回仓储权威快照，避免内存中间态与持久化结果漂移。
-  return toPublicTask(saved.task);
+  const publicTask = toPublicTask(saved.task);
+  publishTaskAdvancedEvent(publishEvent, publicTask);
+  return publicTask;
 }

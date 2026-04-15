@@ -3,12 +3,15 @@ import {
   LightTaskError,
   type LightTaskGraph,
   type LightTaskPlan,
+  type LightTaskRuntime,
   type LightTaskTask,
   createLightTask,
 } from "../index";
 import {
+  createInMemoryNotifyCollector,
   createInMemoryGraphRepository,
   createInMemoryPlanRepository,
+  createInMemoryRuntimeRepository,
   createInMemoryTaskRepository,
   createSystemClock,
   createTaskIdGenerator,
@@ -17,6 +20,7 @@ import {
 type TaskRecordFixture = LightTaskTask & {
   lastAdvanceFingerprint?: string;
 };
+type RuntimeRecordFixture = LightTaskRuntime;
 
 type TestLightTaskOptions = Parameters<typeof createLightTask>[0];
 type TestLightTask = ReturnType<typeof createLightTask>;
@@ -34,6 +38,9 @@ export function createTestLightTaskOptions(
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<TaskRecordFixture>(),
     planRepository: overrides.planRepository ?? createInMemoryPlanRepository<LightTaskPlan>(),
     graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<LightTaskGraph>(),
+    runtimeRepository:
+      overrides.runtimeRepository ?? createInMemoryRuntimeRepository<RuntimeRecordFixture>(),
+    notify: overrides.notify ?? createInMemoryNotifyCollector(),
     clock: overrides.clock ?? createSystemClock(),
     idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),
   };

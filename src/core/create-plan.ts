@@ -4,6 +4,7 @@ import {
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import { publishPlanCreatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { toPublicPlan } from "./plan-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -16,6 +17,7 @@ export function createPlanUseCase(
   options: CreateLightTaskOptions,
   input: CreatePlanInput,
 ): LightTaskPlan {
+  const publishEvent = resolveNotifyPublisher(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const createPlan = requireLightTaskFunction(
     options.planRepository?.create,
@@ -45,6 +47,7 @@ export function createPlanUseCase(
     title,
     createdAt: clockNow(),
     metadata: input.metadata,
+    extensions: input.extensions,
   });
   const created = createPlan(plan);
 
@@ -52,5 +55,7 @@ export function createPlanUseCase(
     throwLightTaskError(created.error);
   }
 
-  return toPublicPlan(created.plan);
+  const publicPlan = toPublicPlan(created.plan);
+  publishPlanCreatedEvent(publishEvent, publicPlan);
+  return publicPlan;
 }

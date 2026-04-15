@@ -2,46 +2,55 @@ import { cloneOptional } from "./ds-clone";
 import type { StructuredEntityExtensions } from "./ds-extension";
 import type { RevisionState } from "./ds-revision";
 import { createInitialRevision } from "./ds-revision";
-import type { TaskLifecycleStatus } from "./ds-status";
+import type { RuntimeLifecycleStatus } from "./ds-status";
 
-export interface TaskRecord extends RevisionState {
+export interface RuntimeParentRef extends Record<string, unknown> {
+  kind: string;
   id: string;
+}
+
+export interface RuntimeRecord extends RevisionState {
+  id: string;
+  kind: string;
   title: string;
-  summary?: string;
-  planId?: string;
-  status: TaskLifecycleStatus;
+  status: RuntimeLifecycleStatus;
+  parentRef?: RuntimeParentRef;
+  context?: Record<string, unknown>;
+  result?: Record<string, unknown>;
   createdAt: string;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
 }
 
-export interface CreateTaskRecordInput {
+export interface CreateRuntimeRecordInput {
   id: string;
+  kind: string;
   title: string;
   createdAt: string;
-  summary?: string;
-  planId?: string;
-  status?: TaskLifecycleStatus;
+  status?: RuntimeLifecycleStatus;
+  parentRef?: RuntimeParentRef;
+  context?: Record<string, unknown>;
+  result?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
   idempotencyKey?: string;
 }
 
-export function createTaskRecord(input: CreateTaskRecordInput): TaskRecord {
+export function createRuntimeRecord(input: CreateRuntimeRecordInput): RuntimeRecord {
   const revision = createInitialRevision(input.createdAt, input.idempotencyKey);
 
-  // 数据结构层只做确定性初始化，不做编排规则。
   return {
     id: input.id,
+    kind: input.kind.trim(),
     title: input.title.trim(),
-    summary: input.summary?.trim() || undefined,
-    planId: input.planId,
     status: input.status ?? "queued",
+    parentRef: cloneOptional(input.parentRef),
+    context: cloneOptional(input.context),
+    result: cloneOptional(input.result),
     createdAt: input.createdAt,
     updatedAt: revision.updatedAt,
     revision: revision.revision,
     idempotencyKey: revision.idempotencyKey,
-    // 防止调用方后续修改入参对象污染已创建记录。
     metadata: cloneOptional(input.metadata),
     extensions: cloneOptional(input.extensions),
   };

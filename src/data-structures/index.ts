@@ -1,10 +1,18 @@
 export type {
+  ExtensionNamespaceMap,
+  ExtensionValueMap,
+  StructuredEntityExtensions,
+} from "./ds-extension";
+
+export type {
   TaskLifecycleStatus,
   PlanLifecycleStatus,
+  RuntimeLifecycleStatus,
 } from "./ds-status";
 export {
   isTaskTerminalStatus,
   isPlanTerminalStatus,
+  isRuntimeTerminalStatus,
 } from "./ds-status";
 
 export type { CoreErrorCode, CoreError } from "./ds-error";
@@ -35,6 +43,13 @@ export type {
 export { createPlanSessionRecord } from "./ds-plan";
 
 export type {
+  RuntimeParentRef,
+  RuntimeRecord,
+  CreateRuntimeRecordInput,
+} from "./ds-runtime";
+export { createRuntimeRecord } from "./ds-runtime";
+
+export type {
   DependencyKind,
   GraphNodeRecord,
   GraphEdgeRecord,
@@ -44,6 +59,7 @@ export type {
 export { createGraphSnapshot } from "./ds-graph";
 
 export type {
+  DomainEventAggregate,
   DomainEventType,
   DomainEvent,
   CreateDomainEventInput,

@@ -52,6 +52,75 @@ test("LightTask 公共 API 查询不存在任务时返回 undefined", () => {
   assert.equal(lighttask.getTask("task_missing"), undefined);
 });
 
+test("LightTask 公共 API 支持按计划列出任务且返回快照与内部状态隔离", () => {
+  const planTasks: TaskRecordFixture[] = [
+    {
+      id: "task_plan_a_1",
+      planId: "plan_alpha",
+      title: "计划 Alpha 任务一",
+      status: "queued",
+      revision: 1,
+      createdAt: "2026-04-14T00:00:00.000Z",
+      steps: [
+        {
+          id: "task_plan_a_1_investigate",
+          title: "investigate",
+          stage: "investigate",
+          status: "doing",
+        },
+      ],
+      metadata: { owner: { name: "tester" } },
+    },
+    {
+      id: "task_plan_b_1",
+      planId: "plan_beta",
+      title: "计划 Beta 任务一",
+      status: "queued",
+      revision: 1,
+      createdAt: "2026-04-14T00:00:00.000Z",
+      steps: [
+        {
+          id: "task_plan_b_1_investigate",
+          title: "investigate",
+          stage: "investigate",
+          status: "doing",
+        },
+      ],
+    },
+  ];
+  const taskRepository: TaskRepository<TaskRecordFixture> = {
+    list() {
+      return planTasks.map((task) => structuredClone(task));
+    },
+    get(taskId) {
+      const task = planTasks.find((item) => item.id === taskId);
+      return task ? structuredClone(task) : undefined;
+    },
+    create() {
+      throw new Error("本用例不应走 create");
+    },
+    saveIfRevisionMatches() {
+      throw new Error("本用例不应走 save");
+    },
+  };
+  const lighttask = createLightTask(createTestLightTaskOptions({ taskRepository }));
+
+  const listed = lighttask.listTasksByPlan("  plan_alpha  ");
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, "task_plan_a_1");
+  assert.equal(listed[0].planId, "plan_alpha");
+
+  listed[0].title = "外部篡改";
+  assert.ok(listed[0].metadata);
+  listed[0].metadata.owner = { name: "mutated" };
+
+  const refetched = lighttask.getTask("task_plan_a_1");
+  assert.ok(refetched);
+  assert.equal(refetched.title, "计划 Alpha 任务一");
+  assert.equal(refetched.planId, "plan_alpha");
+  assert.deepEqual(refetched.metadata, { owner: { name: "tester" } });
+});
+
 test("LightTask 公共 API 查询时会标准化 taskId", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   const task = lighttask.createTask({
@@ -86,6 +155,21 @@ test("LightTask 公共 API 查询空白 taskId 时会抛校验错误", () => {
       assert.equal(error.code, "VALIDATION_ERROR");
       assert.equal(error.coreError.message, "任务 ID 不能为空");
       assert.equal(error.details?.taskId, "   ");
+      return true;
+    },
+  );
+});
+
+test("LightTask 公共 API 按计划列任务时空白 planId 会抛校验错误", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  assert.throws(
+    () => lighttask.listTasksByPlan("   "),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      assert.equal(error.coreError.message, "计划 ID 不能为空");
+      assert.equal(error.details?.planId, "   ");
       return true;
     },
   );
@@ -293,12 +377,21 @@ test("LightTask 返回快照应与内部状态隔离", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   const task = lighttask.createTask({
     title: "隔离验证",
+    metadata: { source: { name: "tester" } },
+    extensions: {
+      properties: { priority: "high" },
+      namespaces: { worker: { batch: "1A" } },
+    },
   });
 
   task.title = "外部篡改标题";
   task.status = "failed";
   task.revision = 999;
   task.steps[0].status = "done";
+  assert.ok(task.metadata);
+  task.metadata.source = { name: "mutated" };
+  assert.ok(task.extensions);
+  task.extensions.properties = { priority: "low" };
 
   const stored = lighttask.getTask(task.id);
   assert.ok(stored);
@@ -306,6 +399,11 @@ test("LightTask 返回快照应与内部状态隔离", () => {
   assert.equal(stored.status, "queued");
   assert.equal(stored.revision, 1);
   assert.equal(stored.steps[0].status, "doing");
+  assert.deepEqual(stored.metadata, { source: { name: "tester" } });
+  assert.deepEqual(stored.extensions, {
+    properties: { priority: "high" },
+    namespaces: { worker: { batch: "1A" } },
+  });
 });
 
 test("LightTask listTasks 返回值与内部状态隔离", () => {
@@ -781,6 +879,43 @@ test("LightTask Task API 只要求当前 task 用例依赖，不前置耦合 pla
   assert.equal(listed.length, 1);
   assert.equal(fetched?.title, "最小任务依赖");
   assert.equal(advanced.revision, 2);
+});
+
+test("LightTask listTasksByPlan 走查询路径时不前置要求 get/create/save/clock/idGenerator", () => {
+  const lighttask = createLightTask({
+    taskRepository: {
+      list() {
+        return [
+          {
+            id: "task_plan_query_minimal",
+            planId: "plan_query_minimal",
+            title: "最小计划任务查询",
+            status: "queued",
+            revision: 1,
+            createdAt: "2026-04-14T00:00:00.000Z",
+            steps: [
+              {
+                id: "task_plan_query_minimal_investigate",
+                title: "investigate",
+                stage: "investigate",
+                status: "doing",
+              },
+            ],
+          },
+        ];
+      },
+    },
+    planRepository: {},
+    graphRepository: {},
+    clock: {},
+    idGenerator: {},
+  });
+
+  const listed = lighttask.listTasksByPlan("plan_query_minimal");
+
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, "task_plan_query_minimal");
+  assert.equal(listed[0].planId, "plan_query_minimal");
 });
 
 test("LightTask advanceTask 走推进路径时不前置要求 list/create/clock/idGenerator", () => {

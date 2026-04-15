@@ -1,4 +1,4 @@
-export type { PlanLifecycleStatus, TaskLifecycleStatus } from "../data-structures";
+export type { PlanLifecycleStatus, RuntimeLifecycleStatus, TaskLifecycleStatus } from "../data-structures";
 
 export type { TaskAction, TaskStepProgressPolicy, TaskTransitionResult } from "./rule-task-fsm";
 export {
@@ -18,6 +18,15 @@ export {
   listPlanActions,
   selectDefaultPlanAction,
 } from "./rule-plan-fsm";
+
+export type { RuntimeAction, RuntimeTransitionResult } from "./rule-runtime-fsm";
+export {
+  canRuntimeTransition,
+  getNextRuntimeStatus,
+  transitionRuntimeStatus,
+  listRuntimeActions,
+  selectDefaultRuntimeAction,
+} from "./rule-runtime-fsm";
 
 export type { DagValidationResult, NormalizedDagEdge } from "./rule-graph";
 export { findReadyNodeIds, topologicalSort, validateDagSnapshot } from "./rule-graph";

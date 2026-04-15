@@ -1,22 +1,18 @@
 import { bumpRevision } from "../data-structures";
-import {
-  assertExpectedRevision,
-  assertNextRevision,
-  selectDefaultPlanAction,
-  transitionPlanStatus,
-} from "../rules";
+import { assertExpectedRevision, assertNextRevision } from "../rules";
+import { cloneOptional } from "./clone";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
-import { publishPlanAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
+import { publishPlanUpdatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { clonePersistedPlan, toPublicPlan } from "./plan-snapshot";
 import type {
-  AdvancePlanInput,
   CreateLightTaskOptions,
   LightTaskPlan,
   PersistedLightPlan,
+  UpdatePlanInput,
 } from "./types";
 
 function assertPlanId(planId: string): string {
@@ -33,10 +29,28 @@ function assertPlanId(planId: string): string {
   return normalizedPlanId;
 }
 
-export function advancePlanUseCase(
+function hasOwnField(input: UpdatePlanInput, fieldName: keyof UpdatePlanInput): boolean {
+  return Object.prototype.hasOwnProperty.call(input, fieldName);
+}
+
+function assertUpdatableFields(planId: string, input: UpdatePlanInput): void {
+  if (
+    !hasOwnField(input, "title") &&
+    !hasOwnField(input, "metadata") &&
+    !hasOwnField(input, "extensions")
+  ) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "更新计划时至少提供一个可变更字段", {
+        planId,
+      }),
+    );
+  }
+}
+
+export function updatePlanUseCase(
   options: CreateLightTaskOptions,
   planId: string,
-  input: AdvancePlanInput,
+  input: UpdatePlanInput,
 ): LightTaskPlan {
   const publishEvent = resolveNotifyPublisher(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
@@ -64,30 +78,32 @@ export function advancePlanUseCase(
     );
   }
 
-  const plan = clonePersistedPlan(storedPlan);
-  const action = input.action ?? selectDefaultPlanAction(plan.status);
+  assertUpdatableFields(normalizedPlanId, input);
+  assertExpectedRevision(storedPlan.revision, input.expectedRevision);
+  assertNextRevision(storedPlan.revision, storedPlan.revision + 1);
 
-  if (!action) {
+  const nextTitle = hasOwnField(input, "title") ? input.title?.trim() : storedPlan.title;
+  if (!nextTitle) {
     throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "当前计划没有可推进动作", {
-        planId: normalizedPlanId,
-        currentStatus: plan.status,
+      createLightTaskError("VALIDATION_ERROR", "计划标题不能为空", {
+        title: input.title,
       }),
     );
   }
 
-  assertExpectedRevision(plan.revision, input.expectedRevision);
-  assertNextRevision(plan.revision, plan.revision + 1);
+  const nextRevision = bumpRevision(storedPlan, clockNow(), storedPlan.idempotencyKey);
+  const nextPlanBase = clonePersistedPlan(storedPlan);
 
-  const transition = transitionPlanStatus(plan.status, action);
-  if (!transition.ok) {
-    throwLightTaskError(transition.error);
-  }
-
-  const nextRevision = bumpRevision(plan, clockNow(), plan.idempotencyKey);
+  // 更新接口只负责结构化资料，不跨越到生命周期状态机，避免与 advancePlan 语义重叠。
   const nextPlan: PersistedLightPlan = {
-    ...plan,
-    status: transition.status,
+    ...nextPlanBase,
+    title: nextTitle,
+    metadata: hasOwnField(input, "metadata")
+      ? cloneOptional(input.metadata ?? undefined)
+      : nextPlanBase.metadata,
+    extensions: hasOwnField(input, "extensions")
+      ? cloneOptional(input.extensions ?? undefined)
+      : nextPlanBase.extensions,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,
@@ -99,6 +115,6 @@ export function advancePlanUseCase(
   }
 
   const publicPlan = toPublicPlan(saved.plan);
-  publishPlanAdvancedEvent(publishEvent, publicPlan);
+  publishPlanUpdatedEvent(publishEvent, publicPlan);
   return publicPlan;
 }

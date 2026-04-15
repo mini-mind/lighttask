@@ -1,8 +1,10 @@
+import { cloneOptional } from "./clone";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import { publishTaskCreatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -15,6 +17,7 @@ export function createTaskUseCase(
   options: CreateLightTaskOptions,
   input: CreateTaskInput,
 ): LightTaskTask {
+  const publishEvent = resolveNotifyPublisher(options);
   const nextTaskId = requireLightTaskFunction(
     options.idGenerator?.nextTaskId,
     "idGenerator.nextTaskId",
@@ -53,6 +56,8 @@ export function createTaskUseCase(
     idempotencyKey: undefined,
     createdAt: clockNow(),
     steps: createDefaultTaskSteps(taskId),
+    metadata: cloneOptional(input.metadata),
+    extensions: cloneOptional(input.extensions),
   };
 
   const created = createTask(task);
@@ -61,5 +66,7 @@ export function createTaskUseCase(
   }
 
   // 以仓储返回的快照为准，避免持久化层规范化后的结果无法反映到 API 返回值。
-  return toPublicTask(created.task);
+  const publicTask = toPublicTask(created.task);
+  publishTaskCreatedEvent(publishEvent, publicTask);
+  return publicTask;
 }

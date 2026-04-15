@@ -1,4 +1,5 @@
 import type { TaskAction } from "../rules";
+import { cloneValue } from "./clone";
 import type { LightTaskTask, PersistedLightTask, TaskStage } from "./types";
 
 const DEFAULT_STAGES: ReadonlyArray<TaskStage> = [
@@ -10,18 +11,13 @@ const DEFAULT_STAGES: ReadonlyArray<TaskStage> = [
 ];
 
 export function clonePersistedTask(task: PersistedLightTask): PersistedLightTask {
-  return {
-    ...task,
-    steps: task.steps.map((step) => ({ ...step })),
-  };
+  return cloneValue(task);
 }
 
 export function toPublicTask(task: PersistedLightTask): LightTaskTask {
-  const { lastAdvanceFingerprint: _lastAdvanceFingerprint, ...publicTask } = task;
-  return {
-    ...publicTask,
-    steps: task.steps.map((step) => ({ ...step })),
-  };
+  const snapshot = clonePersistedTask(task);
+  const { lastAdvanceFingerprint: _lastAdvanceFingerprint, ...publicTask } = snapshot;
+  return publicTask;
 }
 
 export function createDefaultTaskSteps(taskId: string): PersistedLightTask["steps"] {

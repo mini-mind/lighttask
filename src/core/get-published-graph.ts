@@ -6,9 +6,9 @@ import {
 } from "./lighttask-error";
 import type { CreateLightTaskOptions, LightTaskGraph } from "./types";
 
-const DRAFT_GRAPH_SCOPE = "draft" as const;
+const PUBLISHED_GRAPH_SCOPE = "published" as const;
 
-export function getGraphUseCase(
+export function getPublishedGraphUseCase(
   options: CreateLightTaskOptions,
   planId: string,
 ): LightTaskGraph | undefined {
@@ -27,12 +27,12 @@ export function getGraphUseCase(
   const plan = getPlan(normalizedPlanId);
   if (!plan) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到计划，无法读取图快照", {
+      createLightTaskError("NOT_FOUND", "未找到计划，无法读取已发布图快照", {
         planId: normalizedPlanId,
       }),
     );
   }
 
-  const graph = getGraph(normalizedPlanId, DRAFT_GRAPH_SCOPE);
+  const graph = getGraph(normalizedPlanId, PUBLISHED_GRAPH_SCOPE);
   return graph ? toPublicGraph(graph) : undefined;
 }

@@ -1,6 +1,7 @@
 import { bumpRevision, createGraphSnapshot } from "../data-structures";
 import { assertExpectedRevision, assertNextRevision, validateDagSnapshot } from "../rules";
-import { cloneValue } from "./clone";
+import { cloneOptional, cloneValue } from "./clone";
+import { publishGraphSavedEvent, resolveNotifyPublisher } from "./notify-event";
 import { toPublicGraph } from "./graph-snapshot";
 import {
   createLightTaskError,
@@ -13,6 +14,8 @@ import type {
   PersistedLightGraph,
   SaveGraphInput,
 } from "./types";
+
+const DRAFT_GRAPH_SCOPE = "draft" as const;
 
 function assertPlanId(planId: string): string {
   const normalizedPlanId = planId.trim();
@@ -49,6 +52,7 @@ export function saveGraphUseCase(
   planId: string,
   input: SaveGraphInput,
 ): LightTaskGraph {
+  const publishEvent = resolveNotifyPublisher(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const getGraph = requireLightTaskFunction(options.graphRepository?.get, "graphRepository.get");
   const normalizedPlanId = assertPlanId(planId);
@@ -62,7 +66,7 @@ export function saveGraphUseCase(
   }
   assertGraphInput(normalizedPlanId, input);
 
-  const storedGraph = getGraph(normalizedPlanId);
+  const storedGraph = getGraph(normalizedPlanId, DRAFT_GRAPH_SCOPE);
   const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
 
   if (!storedGraph) {
@@ -86,15 +90,20 @@ export function saveGraphUseCase(
         nodes: input.nodes,
         edges: input.edges,
         createdAt: clockNow(),
+        metadata: input.metadata,
+        extensions: input.extensions,
         idempotencyKey: normalizedIdempotencyKey,
       }),
+      DRAFT_GRAPH_SCOPE,
     );
 
     if (!created.ok) {
       throwLightTaskError(created.error);
     }
 
-    return toPublicGraph(created.graph);
+    const publicGraph = toPublicGraph(created.graph);
+    publishGraphSavedEvent(publishEvent, normalizedPlanId, publicGraph);
+    return publicGraph;
   }
 
   if (input.expectedRevision === undefined) {
@@ -118,15 +127,24 @@ export function saveGraphUseCase(
     nodes: cloneValue(input.nodes),
     edges: cloneValue(input.edges),
     createdAt: storedGraph.createdAt,
+    metadata: cloneOptional(input.metadata),
+    extensions: cloneOptional(input.extensions),
     updatedAt: nextRevision.updatedAt,
     revision: nextRevision.revision,
     idempotencyKey: nextRevision.idempotencyKey,
   };
-  const saved = saveIfRevisionMatches(normalizedPlanId, nextGraph, storedGraph.revision);
+  const saved = saveIfRevisionMatches(
+    normalizedPlanId,
+    nextGraph,
+    storedGraph.revision,
+    DRAFT_GRAPH_SCOPE,
+  );
 
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }
 
-  return toPublicGraph(saved.graph);
+  const publicGraph = toPublicGraph(saved.graph);
+  publishGraphSavedEvent(publishEvent, normalizedPlanId, publicGraph);
+  return publicGraph;
 }

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createCoreError } from "../data-structures";
-import type { GraphRepository } from "./port-graph-repo";
+import type { DomainEvent } from "../data-structures";
+import type { GraphRepository, GraphSnapshotScope } from "./port-graph-repo";
+import type { NotifyPort } from "./port-notify";
 import type { PlanRepository } from "./port-plan-repo";
+import type { RuntimeRepository } from "./port-runtime-repo";
 import type { ClockPort, IdGeneratorPort } from "./port-system";
 import type { TaskRepository } from "./port-task-repo";
 
@@ -13,6 +16,8 @@ type KeyedRevisionRecord = {
 type RevisionRecord = {
   revision: number;
 };
+
+const DEFAULT_GRAPH_SCOPE: GraphSnapshotScope = "draft";
 
 function cloneSnapshot<TRecord>(record: TRecord): TRecord {
   return structuredClone(record);
@@ -188,18 +193,77 @@ export function createInMemoryPlanRepository<
   };
 }
 
+export function createInMemoryRuntimeRepository<
+  TRuntime extends KeyedRevisionRecord,
+>(): RuntimeRepository<TRuntime> {
+  const repository = createInMemoryKeyedRepository<TRuntime>({
+    entityName: "运行时",
+    entityIdLabel: "runtimeId",
+  });
+
+  return {
+    list() {
+      return repository.list();
+    },
+    get(runtimeId) {
+      return repository.get(runtimeId);
+    },
+    create(runtime) {
+      const created = repository.create(runtime);
+      if (!created.ok) {
+        return created;
+      }
+
+      return {
+        ok: true as const,
+        runtime: created.record,
+      };
+    },
+    saveIfRevisionMatches(runtime, expectedRevision) {
+      const saved = repository.saveIfRevisionMatches(runtime, expectedRevision);
+      if (!saved.ok) {
+        return saved;
+      }
+
+      return {
+        ok: true as const,
+        runtime: saved.record,
+      };
+    },
+  };
+}
+
 export function createInMemoryGraphRepository<
   TGraph extends RevisionRecord,
 >(): GraphRepository<TGraph> {
-  const graphs = new Map<string, TGraph>();
+  const graphsByScope = new Map<GraphSnapshotScope, Map<string, TGraph>>();
+
+  function resolveGraphScope(scope: GraphSnapshotScope | undefined): GraphSnapshotScope {
+    return scope ?? DEFAULT_GRAPH_SCOPE;
+  }
+
+  function getGraphs(scope: GraphSnapshotScope | undefined): Map<string, TGraph> {
+    const normalizedScope = resolveGraphScope(scope);
+    const existed = graphsByScope.get(normalizedScope);
+
+    if (existed) {
+      return existed;
+    }
+
+    // 草稿与已发布图必须逻辑隔离，避免发布边界退化成对同一记录的覆写。
+    const created = new Map<string, TGraph>();
+    graphsByScope.set(normalizedScope, created);
+    return created;
+  }
 
   return {
-    get(planId) {
-      const graph = graphs.get(planId);
+    get(planId, scope) {
+      const graph = getGraphs(scope).get(planId);
       return graph ? cloneSnapshot(graph) : undefined;
     },
-    create(planId, graph) {
+    create(planId, graph, scope) {
       const snapshot = cloneSnapshot(graph);
+      const graphs = getGraphs(scope);
 
       if (graphs.has(planId)) {
         return {
@@ -214,8 +278,9 @@ export function createInMemoryGraphRepository<
         graph: cloneSnapshot(snapshot),
       };
     },
-    saveIfRevisionMatches(planId, graph, expectedRevision) {
+    saveIfRevisionMatches(planId, graph, expectedRevision, scope) {
       const snapshot = cloneSnapshot(graph);
+      const graphs = getGraphs(scope);
       const current = graphs.get(planId);
 
       if (!current) {
@@ -260,6 +325,30 @@ export function createTaskIdGenerator(): IdGeneratorPort {
     // CLI 与测试只需要稳定可用的本地 ID 生成器，因此实现放在 ports 层供组合侧复用。
     nextTaskId() {
       return `task_${randomUUID()}`;
+    },
+  };
+}
+
+export interface InMemoryNotifyCollector<TEvent extends DomainEvent = DomainEvent>
+  extends NotifyPort<TEvent> {
+  listPublished(): TEvent[];
+  clear(): void;
+}
+
+export function createInMemoryNotifyCollector<
+  TEvent extends DomainEvent = DomainEvent,
+>(): InMemoryNotifyCollector<TEvent> {
+  const publishedEvents: TEvent[] = [];
+
+  return {
+    publish(event) {
+      publishedEvents.push(cloneSnapshot(event));
+    },
+    listPublished() {
+      return publishedEvents.map((event) => cloneSnapshot(event));
+    },
+    clear() {
+      publishedEvents.length = 0;
     },
   };
 }

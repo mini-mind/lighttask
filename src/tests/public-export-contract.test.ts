@@ -57,10 +57,12 @@ test("公共导出契约：data-structures 子入口保持关键 runtime 导出"
   assert.equal(typeof dataStructuresExports.bumpRevision, "function");
   assert.equal(typeof dataStructuresExports.createTaskRecord, "function");
   assert.equal(typeof dataStructuresExports.createPlanSessionRecord, "function");
+  assert.equal(typeof dataStructuresExports.createRuntimeRecord, "function");
   assert.equal(typeof dataStructuresExports.createGraphSnapshot, "function");
   assert.equal(typeof dataStructuresExports.createDomainEvent, "function");
   assert.equal(typeof dataStructuresExports.isTaskTerminalStatus, "function");
   assert.equal(typeof dataStructuresExports.isPlanTerminalStatus, "function");
+  assert.equal(typeof dataStructuresExports.isRuntimeTerminalStatus, "function");
   assert.ok("CORE_ERROR_CODES" in dataStructuresExports);
   assert.ok("LightTaskError" in dataStructuresExports);
 });
@@ -78,6 +80,11 @@ test("公共导出契约：rules 子入口保持关键 runtime 导出", () => {
   assert.equal(typeof rulesExports.getNextPlanStatus, "function");
   assert.equal(typeof rulesExports.transitionPlanStatus, "function");
   assert.equal(typeof rulesExports.listPlanActions, "function");
+  assert.equal(typeof rulesExports.canRuntimeTransition, "function");
+  assert.equal(typeof rulesExports.getNextRuntimeStatus, "function");
+  assert.equal(typeof rulesExports.transitionRuntimeStatus, "function");
+  assert.equal(typeof rulesExports.listRuntimeActions, "function");
+  assert.equal(typeof rulesExports.selectDefaultRuntimeAction, "function");
   assert.equal(typeof rulesExports.findReadyNodeIds, "function");
   assert.equal(typeof rulesExports.topologicalSort, "function");
   assert.equal(typeof rulesExports.validateDagSnapshot, "function");

@@ -2,17 +2,24 @@ import { cloneValue } from "./ds-clone";
 
 export type DomainEventType =
   | "task.created"
-  | "task.updated"
-  | "task.completed"
-  | "task.failed"
+  | "task.advanced"
   | "plan.created"
   | "plan.updated"
-  | "plan.confirmed"
-  | "graph.updated";
+  | "plan.advanced"
+  | "graph.saved"
+  | "graph.published"
+  | "runtime.created"
+  | "runtime.advanced";
 
-export interface DomainEvent<TPayload = Record<string, unknown>> {
+export type DomainEventAggregate = "task" | "plan" | "graph" | "runtime";
+
+export interface DomainEvent<
+  TType extends DomainEventType = DomainEventType,
+  TPayload = Record<string, unknown>,
+> {
   id: string;
-  type: DomainEventType;
+  type: TType;
+  aggregate: DomainEventAggregate;
   aggregateId: string;
   occurredAt: string;
   revision: number;
@@ -21,9 +28,13 @@ export interface DomainEvent<TPayload = Record<string, unknown>> {
   payload: TPayload;
 }
 
-export interface CreateDomainEventInput<TPayload = Record<string, unknown>> {
+export interface CreateDomainEventInput<
+  TType extends DomainEventType = DomainEventType,
+  TPayload = Record<string, unknown>,
+> {
   id: string;
-  type: DomainEventType;
+  type: TType;
+  aggregate: DomainEventAggregate;
   aggregateId: string;
   occurredAt: string;
   revision: number;
@@ -31,13 +42,15 @@ export interface CreateDomainEventInput<TPayload = Record<string, unknown>> {
   payload: TPayload;
 }
 
-export function createDomainEvent<TPayload = Record<string, unknown>>(
-  input: CreateDomainEventInput<TPayload>,
-): DomainEvent<TPayload> {
+export function createDomainEvent<
+  TType extends DomainEventType = DomainEventType,
+  TPayload = Record<string, unknown>,
+>(input: CreateDomainEventInput<TType, TPayload>): DomainEvent<TType, TPayload> {
   // 显式 version 字段用于后续协议演进。
   return {
     id: input.id,
     type: input.type,
+    aggregate: input.aggregate,
     aggregateId: input.aggregateId,
     occurredAt: input.occurredAt,
     revision: input.revision,

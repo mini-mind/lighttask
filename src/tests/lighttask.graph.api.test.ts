@@ -65,6 +65,16 @@ test("LightTask Graph API 查询不存在图快照时返回 undefined", () => {
   assert.equal(lighttask.getGraph("plan_graph_empty"), undefined);
 });
 
+test("LightTask Graph API 查询不存在已发布图快照时返回 undefined", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_published_empty",
+    title: "空发布图计划",
+  });
+
+  assert.equal(lighttask.getPublishedGraph("plan_graph_published_empty"), undefined);
+});
+
 test("LightTask Graph API 在计划不存在但图快照存在时返回 NOT_FOUND", () => {
   const orphanGraph: LightTaskGraph = {
     nodes: [{ id: "node_orphan", taskId: "task_orphan", label: "孤儿任务" }],
@@ -103,6 +113,46 @@ test("LightTask Graph API 在计划不存在但图快照存在时返回 NOT_FOUN
   });
 });
 
+test("LightTask Graph API 在计划不存在但已发布图快照存在时返回 NOT_FOUND", () => {
+  const orphanGraph: LightTaskGraph = {
+    nodes: [{ id: "node_orphan_published", taskId: "task_orphan", label: "孤儿已发布任务" }],
+    edges: [],
+    revision: 1,
+    createdAt: "2026-04-14T00:00:00.000Z",
+    updatedAt: "2026-04-14T00:00:00.000Z",
+  };
+  const lighttask = createLightTask({
+    ...createTestLightTaskOptions(),
+    graphRepository: {
+      get(planId, scope) {
+        return planId === "plan_orphan_published" && scope === "published"
+          ? structuredClone(orphanGraph)
+          : undefined;
+      },
+      create() {
+        return {
+          ok: true as const,
+          graph: structuredClone(orphanGraph),
+        };
+      },
+      saveIfRevisionMatches() {
+        return {
+          ok: true as const,
+          graph: structuredClone(orphanGraph),
+        };
+      },
+    },
+  });
+
+  expectLightTaskError(() => lighttask.getPublishedGraph("plan_orphan_published"), {
+    code: "NOT_FOUND",
+    message: "未找到计划，无法读取已发布图快照",
+    details: {
+      planId: "plan_orphan_published",
+    },
+  });
+});
+
 test("LightTask Graph API 查询时会标准化 planId", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   lighttask.createPlan({
@@ -119,10 +169,41 @@ test("LightTask Graph API 查询时会标准化 planId", () => {
   assert.equal(stored.revision, 1);
 });
 
+test("LightTask Graph API 查询已发布图时会标准化 planId", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_published_trim",
+    title: "已发布图查询标准化",
+  });
+  lighttask.saveGraph("plan_graph_published_trim", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_graph_published_trim", {
+    expectedRevision: 1,
+  });
+
+  const stored = lighttask.getPublishedGraph("  plan_graph_published_trim  ");
+  assert.ok(stored);
+  assert.equal(stored.revision, 1);
+});
+
 test("LightTask Graph API 查询空白 planId 时会抛校验错误", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
 
   expectLightTaskError(() => lighttask.getGraph("   "), {
+    code: "VALIDATION_ERROR",
+    message: "计划 ID 不能为空",
+    details: {
+      planId: "   ",
+    },
+  });
+});
+
+test("LightTask Graph API 查询已发布图时空白 planId 会抛校验错误", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  expectLightTaskError(() => lighttask.getPublishedGraph("   "), {
     code: "VALIDATION_ERROR",
     message: "计划 ID 不能为空",
     details: {
@@ -214,6 +295,71 @@ test("LightTask Graph API 支持按 expectedRevision 更新图快照", () => {
 
   assert.equal(updated.revision, 2);
   assert.equal(updated.nodes.length, 2);
+});
+
+test("LightTask Graph API 支持发布草稿图并读取已发布图", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_publish",
+    title: "图草稿发布",
+  });
+
+  lighttask.saveGraph("plan_graph_publish", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "草稿任务" }],
+    edges: [],
+  });
+
+  const published = lighttask.publishGraph("plan_graph_publish", {
+    expectedRevision: 1,
+  });
+
+  assert.equal(published.revision, 1);
+  assert.equal(published.nodes[0].label, "草稿任务");
+
+  const storedDraft = lighttask.getGraph("plan_graph_publish");
+  const storedPublished = lighttask.getPublishedGraph("plan_graph_publish");
+  assert.ok(storedDraft);
+  assert.ok(storedPublished);
+  assert.equal(storedDraft.revision, 1);
+  assert.equal(storedPublished.revision, 1);
+  assert.equal(storedPublished.nodes[0].label, "草稿任务");
+});
+
+test("LightTask Graph API 发布后草稿与已发布语义保持隔离，直到再次发布才刷新", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_publish_boundary",
+    title: "图发布边界",
+  });
+
+  lighttask.saveGraph("plan_graph_publish_boundary", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "草稿 v1" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_graph_publish_boundary", {
+    expectedRevision: 1,
+  });
+
+  lighttask.saveGraph("plan_graph_publish_boundary", {
+    expectedRevision: 1,
+    nodes: [{ id: "node_1", taskId: "task_1", label: "草稿 v2" }],
+    edges: [],
+  });
+
+  const draftAfterUpdate = lighttask.getGraph("plan_graph_publish_boundary");
+  const publishedBeforeRepublish = lighttask.getPublishedGraph("plan_graph_publish_boundary");
+  assert.ok(draftAfterUpdate);
+  assert.ok(publishedBeforeRepublish);
+  assert.equal(draftAfterUpdate.revision, 2);
+  assert.equal(draftAfterUpdate.nodes[0].label, "草稿 v2");
+  assert.equal(publishedBeforeRepublish.revision, 1);
+  assert.equal(publishedBeforeRepublish.nodes[0].label, "草稿 v1");
+
+  const republished = lighttask.publishGraph("plan_graph_publish_boundary", {
+    expectedRevision: 2,
+  });
+  assert.equal(republished.revision, 2);
+  assert.equal(republished.nodes[0].label, "草稿 v2");
 });
 
 test("LightTask Graph API 会标准化并持久化 idempotencyKey", () => {
@@ -345,6 +491,133 @@ test("LightTask Graph API 在读取后图被并发删除时返回 NOT_FOUND", ()
       message: "计划图不存在，无法保存变更",
       details: {
         planId: "plan_graph_deleted",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 发布图时会标准化 planId", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_publish_trim",
+    title: "图发布标准化",
+  });
+  lighttask.saveGraph("plan_graph_publish_trim", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
+    edges: [],
+  });
+
+  const published = lighttask.publishGraph("  plan_graph_publish_trim  ", {
+    expectedRevision: 1,
+  });
+
+  assert.equal(published.revision, 1);
+  assert.equal(lighttask.getPublishedGraph("plan_graph_publish_trim")?.revision, 1);
+});
+
+test("LightTask Graph API 发布图时空白 planId 会抛校验错误", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  expectLightTaskError(
+    () =>
+      lighttask.publishGraph("   ", {
+        expectedRevision: 1,
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "计划 ID 不能为空",
+      details: {
+        planId: "   ",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 发布图前要求计划已存在", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  expectLightTaskError(
+    () =>
+      lighttask.publishGraph("plan_publish_missing", {
+        expectedRevision: 1,
+      }),
+    {
+      code: "NOT_FOUND",
+      message: "未找到计划，无法发布图快照",
+      details: {
+        planId: "plan_publish_missing",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 发布图前要求草稿图已存在", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_publish_without_draft",
+    title: "无草稿不可发布",
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.publishGraph("plan_publish_without_draft", {
+        expectedRevision: 1,
+      }),
+    {
+      code: "NOT_FOUND",
+      message: "未找到图草稿，无法发布图快照",
+      details: {
+        planId: "plan_publish_without_draft",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 发布图时 expectedRevision 为必填字段", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_publish_need_revision",
+    title: "发布 revision 必填",
+  });
+  lighttask.saveGraph("plan_publish_need_revision", {
+    nodes: [],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.publishGraph("plan_publish_need_revision", {
+        expectedRevision: undefined as never,
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "expectedRevision 必须是大于等于 1 的整数",
+    },
+  );
+});
+
+test("LightTask Graph API 发布图时 expectedRevision 与草稿 revision 不一致会抛冲突错误", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_publish_revision_conflict",
+    title: "发布 revision 冲突",
+  });
+  lighttask.saveGraph("plan_publish_revision_conflict", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "任务一" }],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.publishGraph("plan_publish_revision_conflict", {
+        expectedRevision: 2,
+      }),
+    {
+      code: "REVISION_CONFLICT",
+      message: "expectedRevision 与当前 revision 不一致",
+      details: {
+        expectedRevision: 2,
+        currentRevision: 1,
       },
     },
   );
@@ -540,18 +813,54 @@ test("LightTask Graph API 返回快照应与内部状态隔离", () => {
   });
 
   const graph = lighttask.saveGraph("plan_graph_snapshot", {
-    nodes: [{ id: "node_1", taskId: "task_1", label: "任务一", metadata: { rank: 1 } }],
-    edges: [],
+    nodes: [
+      {
+        id: "node_1",
+        taskId: "task_1",
+        label: "任务一",
+        metadata: { rank: 1 },
+        extensions: { presentation: { x: 1, y: 2 } },
+      },
+    ],
+    edges: [
+      {
+        id: "edge_1",
+        fromNodeId: "node_1",
+        toNodeId: "node_1",
+        kind: "relates_to",
+        extensions: { properties: { required: true } },
+      },
+    ],
+    metadata: { owner: { name: "tester" } },
+    extensions: {
+      presentation: { zoom: 1 },
+      namespaces: { graphEditor: { lane: "alpha" } },
+    },
   });
 
   graph.nodes[0].label = "外部篡改";
   assert.ok(graph.nodes[0].metadata);
   graph.nodes[0].metadata.rank = 99;
+  assert.ok(graph.nodes[0].extensions);
+  graph.nodes[0].extensions.presentation = { x: 99, y: 99 };
+  assert.ok(graph.edges[0].extensions);
+  graph.edges[0].extensions.properties = { required: false };
+  assert.ok(graph.metadata);
+  graph.metadata.owner = { name: "mutated" };
+  assert.ok(graph.extensions);
+  graph.extensions.presentation = { zoom: 3 };
 
   const stored = lighttask.getGraph("plan_graph_snapshot");
   assert.ok(stored);
   assert.equal(stored.nodes[0].label, "任务一");
   assert.deepEqual(stored.nodes[0].metadata, { rank: 1 });
+  assert.deepEqual(stored.nodes[0].extensions, { presentation: { x: 1, y: 2 } });
+  assert.deepEqual(stored.edges[0].extensions, { properties: { required: true } });
+  assert.deepEqual(stored.metadata, { owner: { name: "tester" } });
+  assert.deepEqual(stored.extensions, {
+    presentation: { zoom: 1 },
+    namespaces: { graphEditor: { lane: "alpha" } },
+  });
 });
 
 test("LightTask Graph API 在端口直接抛出原生异常时会归一化为 LightTaskError", () => {
@@ -881,6 +1190,36 @@ test("LightTask Graph API 在注入坏依赖时会逐项报告缺失 graph 端�
       },
     },
     {
+      name: "graphRepository.create",
+      options: {
+        graphRepository: {
+          get(_planId: string, scope?: "draft" | "published") {
+            return scope === "draft"
+              ? {
+                  nodes: [],
+                  edges: [],
+                  revision: 1,
+                  createdAt: "2026-04-14T00:00:00.000Z",
+                  updatedAt: "2026-04-14T00:00:00.000Z",
+                }
+              : undefined;
+          },
+          saveIfRevisionMatches() {
+            return { ok: true as const, graph: {} as LightTaskGraph };
+          },
+        },
+      },
+      invoke(lighttask: ReturnType<typeof createLightTask>) {
+        lighttask.createPlan({
+          id: "plan_invalid_publish_create_dependency",
+          title: "publish create 坏依赖校验",
+        });
+        lighttask.publishGraph("plan_invalid_publish_create_dependency", {
+          expectedRevision: 1,
+        });
+      },
+    },
+    {
       name: "graphRepository.saveIfRevisionMatches",
       options: {
         graphRepository: {
@@ -907,6 +1246,34 @@ test("LightTask Graph API 在注入坏依赖时会逐项报告缺失 graph 端�
           expectedRevision: 1,
           nodes: [],
           edges: [],
+        });
+      },
+    },
+    {
+      name: "graphRepository.saveIfRevisionMatches",
+      options: {
+        graphRepository: {
+          get(_planId: string, scope?: "draft" | "published") {
+            return {
+              nodes: [],
+              edges: [],
+              revision: scope === "published" ? 1 : 2,
+              createdAt: "2026-04-14T00:00:00.000Z",
+              updatedAt: "2026-04-14T00:00:00.000Z",
+            };
+          },
+          create() {
+            return { ok: true as const, graph: {} as LightTaskGraph };
+          },
+        },
+      },
+      invoke(lighttask: ReturnType<typeof createLightTask>) {
+        lighttask.createPlan({
+          id: "plan_invalid_publish_save_dependency",
+          title: "publish save 坏依赖校验",
+        });
+        lighttask.publishGraph("plan_invalid_publish_save_dependency", {
+          expectedRevision: 2,
         });
       },
     },

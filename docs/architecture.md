@@ -20,7 +20,7 @@
 1. `data-structures`：实体、状态、事件、错误、revision 等基础结构。
 2. `rules`：状态机、DAG、幂等、revision 校验等纯规则。
 3. `ports`：仓储、时钟、ID 生成器等端口契约；仓库内允许放仅供 CLI/测试复用的极简本地实现。
-4. `core`：`createTask / getTask / listTasks / advanceTask / createPlan / getPlan / getGraph / saveGraph` 编排入口，组合规则、端口与 `data-structures` 稳定入口，不承载应用层策略；其中计划编排当前只依赖 `planRepository.get/create`，运行时依赖校验也应按 use case 路径最小化，避免构造期前置耦合无关端口。
+4. `core`：`createTask / getTask / listTasks / advanceTask / createPlan / getPlan / getGraph / saveGraph / createRuntime / getRuntime / listRuntimes / advanceRuntime` 编排入口，组合规则、端口与 `data-structures` 稳定入口，不承载应用层策略；其中计划与运行时编排都应按 use case 路径最小化依赖校验，避免构造期前置耦合无关端口。
 5. 上层应用：`linpo`、`TopoFlow`、未来 uTools 应用，位于本仓库之外。
 
 ## 幂等与路径最小依赖
@@ -29,6 +29,7 @@
 2. 图快照上的 `idempotencyKey` 当前只是 `saveGraph` 写入的元数据，不承担任务 replay 那类幂等去重语义。
 3. 任务 API 采用按路径最小依赖校验：`createTask` 只要求 `taskRepository.create`、`clock.now`、`idGenerator.nextTaskId`；`listTasks` 只要求 `taskRepository.list`；`getTask` 只要求 `taskRepository.get`；`advanceTask` 只要求 `taskRepository.get/saveIfRevisionMatches`。
 4. `saveGraph` 也按运行时分支最小化依赖：先读取 `planRepository.get` 与 `graphRepository.get` 判断图是否已存在；创建分支只继续要求 `graphRepository.create`，更新分支只继续要求 `graphRepository.saveIfRevisionMatches`，两条写路径都要求 `clock.now`。
+5. runtime API 也按路径最小依赖校验：`createRuntime` 只要求 `runtimeRepository.create` 与 `clock.now`；`listRuntimes` 只要求 `runtimeRepository.list`；`getRuntime` 只要求 `runtimeRepository.get`；`advanceRuntime` 只要求 `runtimeRepository.get/saveIfRevisionMatches` 与 `clock.now`。
 
 ## 硬约束
 
@@ -67,7 +68,7 @@
 2. 已落地：`port-system`（`clock` / `idGenerator`）
 3. 已落地：`port-plan-repo`（计划记录 `list/get/create/saveIfRevisionMatches`；其中 `core` 当前仅消费 `get/create`，`list/saveIfRevisionMatches` 作为完整契约与后续能力预留）
 4. 已落地：`port-graph-repo`（按 `planId` 读写图快照 `get/create/saveIfRevisionMatches`）
-5. 预留：`port-runtime`
+5. 已落地：`port-runtime`（运行时记录 `list/get/create/saveIfRevisionMatches`）
 6. 预留：`port-policy`
 7. 预留：`port-notify`
 8. 预留：`port-telemetry`
@@ -81,8 +82,12 @@
 6. 已落地：`uc-get-plan`
 7. 已落地：`uc-get-graph`
 8. 已落地：`uc-save-graph`
-9. 预留：`uc-advance-plan`
-10. 预留：`uc-idempotent-replay`
+9. 已落地：`uc-advance-plan`
+10. 已落地：`uc-create-runtime`
+11. 已落地：`uc-get-runtime`
+12. 已落地：`uc-list-runtimes`
+13. 已落地：`uc-advance-runtime`
+14. 预留：`uc-idempotent-replay`
 
 ### 第 5 批：上层应用预留（不在本仓库实现）
 1. `linpo` 应用封装
