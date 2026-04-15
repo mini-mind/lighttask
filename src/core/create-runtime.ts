@@ -1,4 +1,9 @@
-import { type RuntimeOwnerRef, createRuntimeRecord } from "../data-structures";
+import {
+  type RuntimeOwnerRef,
+  type RuntimeParentRef,
+  type RuntimeRelatedRef,
+  createRuntimeRecord,
+} from "../data-structures";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -13,38 +18,80 @@ import type {
   PersistedLightRuntime,
 } from "./types";
 
-function normalizeRuntimeOwnerRef(
-  ownerRef: CreateRuntimeInput["ownerRef"],
-): RuntimeOwnerRef | undefined {
-  if (!ownerRef) {
+type RuntimeRelationRef = RuntimeParentRef | RuntimeOwnerRef | RuntimeRelatedRef;
+
+function normalizeRuntimeRelationRef<TRef extends RuntimeRelationRef>(
+  fieldName: string,
+  ref: TRef | undefined,
+): TRef | undefined {
+  if (!ref) {
     return undefined;
   }
 
-  const kind = typeof ownerRef.kind === "string" ? ownerRef.kind.trim() : "";
-  const id = typeof ownerRef.id === "string" ? ownerRef.id.trim() : "";
+  if (typeof ref !== "object" || ref === null || Array.isArray(ref)) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName} 只允许对象引用`, {
+        [fieldName]: ref,
+      }),
+    );
+  }
 
-  // ownerRef 首切片只承担稳定关系标识，不在这里引入跨聚合查验或更复杂语义。
+  const kind = typeof ref.kind === "string" ? ref.kind.trim() : "";
+  const id = typeof ref.id === "string" ? ref.id.trim() : "";
+
+  // runtime 关系切片只承担稳定关系标识，不在这里引入跨聚合查验或更复杂语义。
   if (!kind) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 ownerRef.kind 不能为空", {
-        ownerRef,
+      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName}.kind 不能为空`, {
+        [fieldName]: ref,
       }),
     );
   }
 
   if (!id) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 ownerRef.id 不能为空", {
-        ownerRef,
+      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName}.id 不能为空`, {
+        [fieldName]: ref,
       }),
     );
   }
 
   return {
-    ...ownerRef,
+    ...ref,
     kind,
     id,
   };
+}
+
+function normalizeRuntimeRelatedRefs(
+  relatedRefs: CreateRuntimeInput["relatedRefs"],
+): RuntimeRelatedRef[] | undefined {
+  if (relatedRefs === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(relatedRefs)) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "运行时 relatedRefs 必须是数组", {
+        relatedRefs,
+      }),
+    );
+  }
+
+  // relatedRefs 仅提供 create-only 的补充关系表达，不在运行时聚合内扩展查询语义。
+  return relatedRefs.map((relatedRef, index) => {
+    const normalizedRelatedRef = normalizeRuntimeRelationRef(`relatedRefs[${index}]`, relatedRef);
+
+    if (!normalizedRelatedRef) {
+      throwLightTaskError(
+        createLightTaskError("VALIDATION_ERROR", `运行时 relatedRefs[${index}] 不能为空`, {
+          relatedRef,
+        }),
+      );
+    }
+
+    return normalizedRelatedRef;
+  });
 }
 
 export function createRuntimeUseCase(
@@ -85,14 +132,17 @@ export function createRuntimeUseCase(
     );
   }
 
-  const ownerRef = normalizeRuntimeOwnerRef(input.ownerRef);
+  const parentRef = normalizeRuntimeRelationRef("parentRef", input.parentRef);
+  const ownerRef = normalizeRuntimeRelationRef("ownerRef", input.ownerRef);
+  const relatedRefs = normalizeRuntimeRelatedRefs(input.relatedRefs);
   const runtime: PersistedLightRuntime = createRuntimeRecord({
     id: runtimeId,
     kind,
     title,
     createdAt: clockNow(),
-    parentRef: input.parentRef,
+    parentRef,
     ownerRef,
+    relatedRefs,
     context: input.context,
     result: input.result,
     metadata: input.metadata,

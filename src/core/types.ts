@@ -12,6 +12,7 @@ import type {
   RuntimeLifecycleStatus,
   RuntimeOwnerRef,
   RuntimeParentRef,
+  RuntimeRelatedRef,
   StructuredEntityExtensions,
 } from "../data-structures";
 import type {
@@ -88,6 +89,7 @@ export interface LightTaskRuntime {
   revision: number;
   parentRef?: RuntimeParentRef;
   ownerRef?: RuntimeOwnerRef;
+  relatedRefs?: RuntimeRelatedRef[];
   context?: Record<string, unknown>;
   result?: Record<string, unknown>;
   createdAt: string;
@@ -151,6 +153,7 @@ export interface CreateRuntimeInput {
   title: string;
   parentRef?: RuntimeParentRef;
   ownerRef?: RuntimeOwnerRef;
+  relatedRefs?: RuntimeRelatedRef[];
   context?: Record<string, unknown>;
   result?: Record<string, unknown>;
   metadata?: Record<string, unknown>;

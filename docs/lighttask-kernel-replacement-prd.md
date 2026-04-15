@@ -145,7 +145,7 @@ LightTask 已具备较完整的编排主干：task / plan / graph / runtime / no
 **Feature 5: 通用 runtime 聚合**
 - Description: runtime 必须作为独立聚合存在，用于承接运行态而不污染 task/plan 本体
 - User flow: createRuntime -> get/list -> advanceRuntime
-- Edge cases: parentRef 为空、ownerRef 非法空白、状态冲突、revision mismatch、运行态结果覆盖
+- Edge cases: parentRef 为空或非法空白、ownerRef 非法空白、relatedRefs 非法空白或非数组、关系字段在 create 后被尝试改写、状态冲突、revision mismatch、运行态结果覆盖
 - Error handling: 与其他聚合一致，基于条件写和统一错误面
 
 **Feature 6: 基础领域事件通知**

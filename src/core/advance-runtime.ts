@@ -34,8 +34,29 @@ function assertRuntimeId(runtimeId: string): string {
   return normalizedRuntimeId;
 }
 
-function hasOwnField(input: AdvanceRuntimeInput, fieldName: keyof AdvanceRuntimeInput): boolean {
-  return Object.prototype.hasOwnProperty.call(input, fieldName);
+const RELATIONSHIP_FIELDS = ["parentRef", "ownerRef", "relatedRefs"] as const;
+
+function hasOwnField(record: Record<string, unknown>, fieldName: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, fieldName);
+}
+
+function assertNoRelationshipMutation(runtimeId: string, input: AdvanceRuntimeInput): void {
+  const inputRecord = input as unknown as Record<string, unknown>;
+  const attemptedFields = RELATIONSHIP_FIELDS.filter((fieldName) => {
+    return hasOwnField(inputRecord, fieldName);
+  });
+
+  if (attemptedFields.length === 0) {
+    return;
+  }
+
+  // 关系字段只允许在创建时写入，推进阶段保持只读，避免 runtime 膨胀成通用关系子系统。
+  throwLightTaskError(
+    createLightTaskError("VALIDATION_ERROR", "advanceRuntime 不允许修改关系字段", {
+      runtimeId,
+      fields: attemptedFields,
+    }),
+  );
 }
 
 export function advanceRuntimeUseCase(
@@ -72,6 +93,8 @@ export function advanceRuntimeUseCase(
     );
   }
 
+  assertNoRelationshipMutation(normalizedRuntimeId, input);
+
   const runtime = clonePersistedRuntime(storedRuntime);
   const action = input.action ?? selectDefaultRuntimeAction(runtime.status);
 
@@ -97,7 +120,7 @@ export function advanceRuntimeUseCase(
     ...runtime,
     status: transition.status,
     // 首切片只允许在推进时携带结果快照，不在这里引入额外策略字段。
-    result: hasOwnField(input, "result")
+    result: hasOwnField(input as unknown as Record<string, unknown>, "result")
       ? cloneOptional(input.result ?? undefined)
       : runtime.result,
     revision: nextRevision.revision,

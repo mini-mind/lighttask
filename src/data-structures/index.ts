@@ -45,6 +45,7 @@ export { createPlanSessionRecord } from "./ds-plan";
 export type {
   RuntimeParentRef,
   RuntimeOwnerRef,
+  RuntimeRelatedRef,
   RuntimeRecord,
   CreateRuntimeRecordInput,
 } from "./ds-runtime";

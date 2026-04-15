@@ -32,7 +32,7 @@
 5. `materializePlanTasks` 只读取 `planRepository.get`、`graphRepository.get(published)`、`taskRepository.list`，并按是否需要创建/同步任务延迟要求 `taskRepository.create`、`taskRepository.saveIfRevisionMatches`、`clock.now`、`idGenerator.nextTaskId`。
 6. `getPlanSchedulingFacts` 只读取 `planRepository.get`、`graphRepository.get(published)` 与 `taskRepository.list`，输出稳定顺序与节点调度事实，不自动物化缺失任务，也不替上层做派发、审批、批量或优先级决策。
 7. `launchPlan` 只负责关闭 `ready` 计划到“已发布图 -> 任务网络 -> confirmed 计划”的最小编排回路；它依赖 `planRepository.get`，并组合 `materializePlanTasks` 与 `advancePlan`，但不内置运行时、通知传输或应用层调度策略。
-8. runtime API 也按路径最小依赖校验：`createRuntime` 只要求 `runtimeRepository.create` 与 `clock.now`，并允许一次性写入最小关系字段 `ownerRef`；`listRuntimes` 只要求 `runtimeRepository.list`；`getRuntime` 只要求 `runtimeRepository.get`；`advanceRuntime` 只要求 `runtimeRepository.get/saveIfRevisionMatches` 与 `clock.now`，且保留已有 `ownerRef` 不允许在推进时改写。
+8. runtime API 也按路径最小依赖校验：`createRuntime` 只要求 `runtimeRepository.create` 与 `clock.now`，并允许一次性写入最小关系字段 `parentRef / ownerRef / relatedRefs`；其中 `parentRef` 与 `ownerRef` 都按稳定引用做归一化校验，`relatedRefs` 只承担 create-only 的补充关系表达，不引入跨聚合存在性检查、生命周期联动或关系查询；`listRuntimes` 只要求 `runtimeRepository.list`；`getRuntime` 只要求 `runtimeRepository.get`；`advanceRuntime` 只要求 `runtimeRepository.get/saveIfRevisionMatches` 与 `clock.now`，且关系字段在推进阶段保持只读，不允许改写。
 9. 调度基础能力由内核提供（图规则、状态机、可运行候选计算所需对象与状态），但具体调度策略、优先级、批量派发、人工审批介入策略由上层应用定义，以保持 core 通用且不臃肿。
 
 ## 硬约束

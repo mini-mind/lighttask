@@ -14,6 +14,11 @@ export interface RuntimeOwnerRef extends Record<string, unknown> {
   id: string;
 }
 
+export interface RuntimeRelatedRef extends Record<string, unknown> {
+  kind: string;
+  id: string;
+}
+
 export interface RuntimeRecord extends RevisionState {
   id: string;
   kind: string;
@@ -21,6 +26,7 @@ export interface RuntimeRecord extends RevisionState {
   status: RuntimeLifecycleStatus;
   parentRef?: RuntimeParentRef;
   ownerRef?: RuntimeOwnerRef;
+  relatedRefs?: RuntimeRelatedRef[];
   context?: Record<string, unknown>;
   result?: Record<string, unknown>;
   createdAt: string;
@@ -36,6 +42,7 @@ export interface CreateRuntimeRecordInput {
   status?: RuntimeLifecycleStatus;
   parentRef?: RuntimeParentRef;
   ownerRef?: RuntimeOwnerRef;
+  relatedRefs?: RuntimeRelatedRef[];
   context?: Record<string, unknown>;
   result?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -53,6 +60,7 @@ export function createRuntimeRecord(input: CreateRuntimeRecordInput): RuntimeRec
     status: input.status ?? "queued",
     parentRef: cloneOptional(input.parentRef),
     ownerRef: cloneOptional(input.ownerRef),
+    relatedRefs: cloneOptional(input.relatedRefs),
     context: cloneOptional(input.context),
     result: cloneOptional(input.result),
     createdAt: input.createdAt,

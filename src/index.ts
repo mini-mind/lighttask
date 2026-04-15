@@ -1,7 +1,12 @@
 export { createLightTask } from "./core/lighttask";
 export { LightTaskError } from "./core/lighttask-error";
 export type { GraphEditOperation } from "./rules";
-export type { OutputLifecycleStatus, RuntimeOwnerRef } from "./data-structures";
+export type {
+  OutputLifecycleStatus,
+  RuntimeOwnerRef,
+  RuntimeParentRef,
+  RuntimeRelatedRef,
+} from "./data-structures";
 
 export type {
   AdvancePlanInput,

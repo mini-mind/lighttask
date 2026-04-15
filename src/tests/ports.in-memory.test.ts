@@ -103,6 +103,16 @@ function createRuntime(runtimeId: string, revision = 1): RuntimeRecord {
       kind: "task",
       id: "task_1",
     },
+    relatedRefs: [
+      {
+        kind: "task",
+        id: "task_2",
+      },
+      {
+        kind: "graph_node",
+        id: "node_1",
+      },
+    ],
     context: { source: { name: "tester" } },
     metadata: { owner: { name: "tester" } },
     extensions: {
@@ -602,6 +612,12 @@ test("端口层 in-memory：runtime create/get/list 返回快照与内部状态�
   created.runtime.parentRef.kind = "mutated";
   assert.ok(created.runtime.ownerRef);
   created.runtime.ownerRef.kind = "changed";
+  assert.ok(created.runtime.relatedRefs);
+  created.runtime.relatedRefs[0].kind = "changed";
+  created.runtime.relatedRefs.push({
+    kind: "plan",
+    id: "plan_mutated",
+  });
 
   const fetched = repository.get("runtime_repo_1");
   assert.ok(fetched);
@@ -614,6 +630,16 @@ test("端口层 in-memory：runtime create/get/list 返回快照与内部状态�
     kind: "task",
     id: "task_1",
   });
+  assert.deepEqual(fetched.relatedRefs, [
+    {
+      kind: "task",
+      id: "task_2",
+    },
+    {
+      kind: "graph_node",
+      id: "node_1",
+    },
+  ]);
 
   const listed = repository.list();
   listed[0].title = "列表篡改";
