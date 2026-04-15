@@ -15,12 +15,7 @@ export type PlanLifecycleStatus =
   | "archived"
   | "failed";
 
-export type RuntimeLifecycleStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type RuntimeLifecycleStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 const TASK_TERMINAL_STATUS: ReadonlySet<TaskLifecycleStatus> = new Set([
   "completed",

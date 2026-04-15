@@ -297,6 +297,225 @@ test("LightTask Graph API 支持按 expectedRevision 更新图快照", () => {
   assert.equal(updated.nodes.length, 2);
 });
 
+test("LightTask Graph API 支持在草稿图上做增量编辑，且再次发布前不影响已发布图", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_boundary",
+    title: "图增量编辑与发布边界",
+  });
+
+  lighttask.saveGraph("plan_graph_edit_boundary", {
+    nodes: [
+      { id: "node_1", taskId: "task_1", label: "节点一 v1" },
+      { id: "node_2", taskId: "task_2", label: "节点二 v1" },
+    ],
+    edges: [{ id: "edge_1", fromNodeId: "node_2", toNodeId: "node_1", kind: "depends_on" }],
+  });
+  lighttask.publishGraph("plan_graph_edit_boundary", {
+    expectedRevision: 1,
+  });
+
+  const edited = lighttask.editGraph("plan_graph_edit_boundary", {
+    expectedRevision: 1,
+    operations: [
+      { type: "remove_edge", edgeId: "edge_1" },
+      { type: "remove_node", nodeId: "node_2" },
+      {
+        type: "upsert_node",
+        node: { id: "node_1", taskId: "task_1_v2", label: "节点一 v2" },
+      },
+      {
+        type: "upsert_node",
+        node: { id: "node_3", taskId: "task_3", label: "节点三" },
+      },
+      {
+        type: "upsert_edge",
+        edge: { id: "edge_2", fromNodeId: "node_1", toNodeId: "node_3", kind: "blocks" },
+      },
+    ],
+    idempotencyKey: " graph_edit_v2 ",
+  });
+
+  assert.equal(edited.revision, 2);
+  assert.equal(edited.idempotencyKey, "graph_edit_v2");
+  assert.deepEqual(
+    edited.nodes.map((node) => ({ id: node.id, label: node.label, taskId: node.taskId })),
+    [
+      { id: "node_1", label: "节点一 v2", taskId: "task_1_v2" },
+      { id: "node_3", label: "节点三", taskId: "task_3" },
+    ],
+  );
+  assert.deepEqual(edited.edges, [
+    { id: "edge_2", fromNodeId: "node_1", toNodeId: "node_3", kind: "blocks" },
+  ]);
+
+  const draftAfterEdit = lighttask.getGraph("plan_graph_edit_boundary");
+  const publishedBeforeRepublish = lighttask.getPublishedGraph("plan_graph_edit_boundary");
+  assert.ok(draftAfterEdit);
+  assert.ok(publishedBeforeRepublish);
+  assert.equal(draftAfterEdit.revision, 2);
+  assert.equal(draftAfterEdit.nodes[0].label, "节点一 v2");
+  assert.equal(publishedBeforeRepublish.revision, 1);
+  assert.equal(publishedBeforeRepublish.nodes[0].label, "节点一 v1");
+  assert.equal(publishedBeforeRepublish.nodes[1].label, "节点二 v1");
+
+  const republished = lighttask.publishGraph("plan_graph_edit_boundary", {
+    expectedRevision: 2,
+  });
+  assert.equal(republished.revision, 2);
+  assert.deepEqual(
+    republished.nodes.map((node) => ({ id: node.id, label: node.label })),
+    [
+      { id: "node_1", label: "节点一 v2" },
+      { id: "node_3", label: "节点三" },
+    ],
+  );
+});
+
+test("LightTask Graph API 增量编辑时要求草稿图已存在", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_without_draft",
+    title: "无草稿不可编辑",
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_without_draft", {
+        expectedRevision: 1,
+        operations: [],
+      }),
+    {
+      code: "NOT_FOUND",
+      message: "未找到图草稿，无法编辑图快照",
+      details: {
+        planId: "plan_graph_edit_without_draft",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 增量编辑时会拒绝删除仍被边引用的节点", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_referenced_node",
+    title: "图编辑节点引用约束",
+  });
+  lighttask.saveGraph("plan_graph_edit_referenced_node", {
+    nodes: [
+      { id: "node_1", taskId: "task_1", label: "节点一" },
+      { id: "node_2", taskId: "task_2", label: "节点二" },
+    ],
+    edges: [{ id: "edge_1", fromNodeId: "node_2", toNodeId: "node_1", kind: "depends_on" }],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_referenced_node", {
+        expectedRevision: 1,
+        operations: [{ type: "remove_node", nodeId: "node_1" }],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除节点仍被边引用，禁止隐式级联删除",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_node",
+        nodeId: "node_1",
+      },
+      verify(error) {
+        assert.deepEqual(error.details?.referencedEdgeIds, ["edge_1"]);
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 增量编辑时会显式拒绝删除不存在的节点和边", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_missing_target",
+    title: "图编辑缺失目标",
+  });
+  lighttask.saveGraph("plan_graph_edit_missing_target", {
+    nodes: [{ id: "node_1", taskId: "task_1", label: "节点一" }],
+    edges: [],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_missing_target", {
+        expectedRevision: 1,
+        operations: [{ type: "remove_node", nodeId: "node_missing" }],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除节点不存在",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_node",
+        nodeId: "node_missing",
+      },
+    },
+  );
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_missing_target", {
+        expectedRevision: 1,
+        operations: [{ type: "remove_edge", edgeId: "edge_missing" }],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除边不存在",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_edge",
+        edgeId: "edge_missing",
+      },
+    },
+  );
+});
+
+test("LightTask Graph API 增量编辑后会在保存前校验结果 DAG", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+  lighttask.createPlan({
+    id: "plan_graph_edit_invalid_dag",
+    title: "图编辑 DAG 校验",
+  });
+  lighttask.saveGraph("plan_graph_edit_invalid_dag", {
+    nodes: [
+      { id: "node_1", taskId: "task_1", label: "节点一" },
+      { id: "node_2", taskId: "task_2", label: "节点二" },
+    ],
+    edges: [{ id: "edge_1", fromNodeId: "node_2", toNodeId: "node_1", kind: "depends_on" }],
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.editGraph("plan_graph_edit_invalid_dag", {
+        expectedRevision: 1,
+        operations: [
+          {
+            type: "upsert_edge",
+            edge: { id: "edge_2", fromNodeId: "node_1", toNodeId: "node_2", kind: "depends_on" },
+          },
+        ],
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "图结构校验失败",
+      verify(error) {
+        assert.ok(Array.isArray(error.details?.errors));
+      },
+    },
+  );
+
+  const draftAfterFailure = lighttask.getGraph("plan_graph_edit_invalid_dag");
+  assert.ok(draftAfterFailure);
+  assert.equal(draftAfterFailure.revision, 1);
+  assert.equal(draftAfterFailure.edges.length, 1);
+});
+
 test("LightTask Graph API 支持发布草稿图并读取已发布图", () => {
   const lighttask = createLightTask(createTestLightTaskOptions());
   lighttask.createPlan({

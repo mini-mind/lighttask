@@ -58,6 +58,7 @@ test("公共导出契约：data-structures 子入口保持关键 runtime 导出"
   assert.equal(typeof dataStructuresExports.createTaskRecord, "function");
   assert.equal(typeof dataStructuresExports.createPlanSessionRecord, "function");
   assert.equal(typeof dataStructuresExports.createRuntimeRecord, "function");
+  assert.equal(typeof dataStructuresExports.createOutputRecord, "function");
   assert.equal(typeof dataStructuresExports.createGraphSnapshot, "function");
   assert.equal(typeof dataStructuresExports.createDomainEvent, "function");
   assert.equal(typeof dataStructuresExports.isTaskTerminalStatus, "function");

@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import {
   LightTaskError,
   type LightTaskGraph,
+  type LightTaskOutput,
   type LightTaskPlan,
   type LightTaskRuntime,
   type LightTaskTask,
   createLightTask,
 } from "../index";
 import {
-  createInMemoryNotifyCollector,
   createInMemoryGraphRepository,
+  createInMemoryNotifyCollector,
+  createInMemoryOutputRepository,
   createInMemoryPlanRepository,
   createInMemoryRuntimeRepository,
   createInMemoryTaskRepository,
@@ -21,6 +23,7 @@ type TaskRecordFixture = LightTaskTask & {
   lastAdvanceFingerprint?: string;
 };
 type RuntimeRecordFixture = LightTaskRuntime;
+type OutputRecordFixture = LightTaskOutput;
 
 type TestLightTaskOptions = Parameters<typeof createLightTask>[0];
 type TestLightTask = ReturnType<typeof createLightTask>;
@@ -40,6 +43,8 @@ export function createTestLightTaskOptions(
     graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<LightTaskGraph>(),
     runtimeRepository:
       overrides.runtimeRepository ?? createInMemoryRuntimeRepository<RuntimeRecordFixture>(),
+    outputRepository:
+      overrides.outputRepository ?? createInMemoryOutputRepository<OutputRecordFixture>(),
     notify: overrides.notify ?? createInMemoryNotifyCollector(),
     clock: overrides.clock ?? createSystemClock(),
     idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),

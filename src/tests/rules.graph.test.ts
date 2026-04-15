@@ -6,6 +6,7 @@ import { LightTaskError } from "../data-structures/ds-error";
 import { createGraphSnapshot } from "../data-structures/ds-graph";
 import type { GraphEdgeRecord } from "../data-structures/ds-graph";
 import {
+  applyGraphEditOperations,
   assertExpectedRevision,
   assertNextRevision,
   decideIdempotency,
@@ -297,6 +298,104 @@ test("规则层 DAG：非法图上计算 ready 会抛错", () => {
       errors: validation.errors,
     },
   });
+});
+
+test("规则层 GraphEdit：按顺序执行 upsert/remove 并保持替换语义显式", () => {
+  const snapshot = createSnapshot(
+    ["n1", "n2"],
+    [{ id: "e1", fromNodeId: "n2", toNodeId: "n1", kind: "depends_on" }],
+  );
+
+  const edited = applyGraphEditOperations(snapshot, [
+    {
+      type: "upsert_node",
+      node: {
+        id: "n1",
+        taskId: "task_n1_v2",
+        label: "节点 n1 v2",
+      },
+    },
+    {
+      type: "upsert_node",
+      node: {
+        id: "n3",
+        taskId: "task_n3",
+        label: "节点 n3",
+      },
+    },
+    { type: "remove_edge", edgeId: "e1" },
+    { type: "remove_node", nodeId: "n2" },
+    {
+      type: "upsert_edge",
+      edge: {
+        id: "e2",
+        fromNodeId: "n3",
+        toNodeId: "n1",
+        kind: "blocks",
+      },
+    },
+  ]);
+
+  assert.deepEqual(edited.nodes, [
+    { id: "n1", taskId: "task_n1_v2", label: "节点 n1 v2" },
+    { id: "n3", taskId: "task_n3", label: "节点 n3" },
+  ]);
+  assert.deepEqual(edited.edges, [{ id: "e2", fromNodeId: "n3", toNodeId: "n1", kind: "blocks" }]);
+});
+
+test("规则层 GraphEdit：删除仍被边引用的节点会显式报错", () => {
+  const snapshot = createSnapshot(
+    ["n1", "n2"],
+    [{ id: "e1", fromNodeId: "n2", toNodeId: "n1", kind: "depends_on" }],
+  );
+
+  expectLightTaskError(
+    () => applyGraphEditOperations(snapshot, [{ type: "remove_node", nodeId: "n1" }]),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除节点仍被边引用，禁止隐式级联删除",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_node",
+        nodeId: "n1",
+        referencedEdgeIds: ["e1"],
+      },
+    },
+  );
+});
+
+test("规则层 GraphEdit：删除不存在的节点会显式报错", () => {
+  const snapshot = createSnapshot(["n1"], []);
+
+  expectLightTaskError(
+    () => applyGraphEditOperations(snapshot, [{ type: "remove_node", nodeId: "n_missing" }]),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除节点不存在",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_node",
+        nodeId: "n_missing",
+      },
+    },
+  );
+});
+
+test("规则层 GraphEdit：删除不存在的边会显式报错", () => {
+  const snapshot = createSnapshot(["n1"], []);
+
+  expectLightTaskError(
+    () => applyGraphEditOperations(snapshot, [{ type: "remove_edge", edgeId: "e_missing" }]),
+    {
+      code: "VALIDATION_ERROR",
+      message: "待删除边不存在",
+      details: {
+        operationIndex: 0,
+        operationType: "remove_edge",
+        edgeId: "e_missing",
+      },
+    },
+  );
 });
 
 test("规则层 Idempotency：同 key 同指纹判定 replay", () => {

@@ -1,4 +1,9 @@
-import type { CoreError, GraphEdgeRecord, GraphSnapshot } from "../data-structures";
+import type {
+  CoreError,
+  GraphEdgeRecord,
+  GraphNodeRecord,
+  GraphSnapshot,
+} from "../data-structures";
 import { createCoreError, throwCoreError } from "../data-structures";
 
 export interface NormalizedDagEdge {
@@ -13,6 +18,29 @@ export interface DagValidationResult {
   nodeIds: string[];
   normalizedEdges: NormalizedDagEdge[];
   errors: CoreError[];
+}
+
+export type GraphEditOperation =
+  | {
+      type: "upsert_node";
+      node: GraphNodeRecord;
+    }
+  | {
+      type: "remove_node";
+      nodeId: string;
+    }
+  | {
+      type: "upsert_edge";
+      edge: GraphEdgeRecord;
+    }
+  | {
+      type: "remove_edge";
+      edgeId: string;
+    };
+
+export interface GraphEditResult {
+  nodes: GraphNodeRecord[];
+  edges: GraphEdgeRecord[];
 }
 
 function normalizeDependencyEdge(edge: GraphEdgeRecord): NormalizedDagEdge | undefined {
@@ -41,6 +69,87 @@ function normalizeDependencyEdge(edge: GraphEdgeRecord): NormalizedDagEdge | und
 
 function createValidationError(message: string, details?: Record<string, unknown>): CoreError {
   return createCoreError("VALIDATION_ERROR", message, details);
+}
+
+function findEdgeReferenceIds(edges: GraphEdgeRecord[], nodeId: string): string[] {
+  return edges
+    .filter((edge) => edge.fromNodeId === nodeId || edge.toNodeId === nodeId)
+    .map((edge) => edge.id);
+}
+
+export function applyGraphEditOperations(
+  snapshot: Pick<GraphSnapshot, "nodes" | "edges">,
+  operations: GraphEditOperation[],
+): GraphEditResult {
+  const nodes = structuredClone(snapshot.nodes);
+  const edges = structuredClone(snapshot.edges);
+
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
+
+    if (operation.type === "upsert_node") {
+      const existedIndex = nodes.findIndex((node) => node.id === operation.node.id);
+      if (existedIndex >= 0) {
+        nodes[existedIndex] = structuredClone(operation.node);
+      } else {
+        nodes.push(structuredClone(operation.node));
+      }
+      continue;
+    }
+
+    if (operation.type === "remove_node") {
+      const existedIndex = nodes.findIndex((node) => node.id === operation.nodeId);
+      if (existedIndex < 0) {
+        throwCoreError(
+          createValidationError("待删除节点不存在", {
+            operationIndex: index,
+            operationType: operation.type,
+            nodeId: operation.nodeId,
+          }),
+        );
+      }
+
+      const referencedEdgeIds = findEdgeReferenceIds(edges, operation.nodeId);
+      if (referencedEdgeIds.length > 0) {
+        throwCoreError(
+          createValidationError("待删除节点仍被边引用，禁止隐式级联删除", {
+            operationIndex: index,
+            operationType: operation.type,
+            nodeId: operation.nodeId,
+            referencedEdgeIds,
+          }),
+        );
+      }
+
+      nodes.splice(existedIndex, 1);
+      continue;
+    }
+
+    if (operation.type === "upsert_edge") {
+      const existedIndex = edges.findIndex((edge) => edge.id === operation.edge.id);
+      if (existedIndex >= 0) {
+        edges[existedIndex] = structuredClone(operation.edge);
+      } else {
+        edges.push(structuredClone(operation.edge));
+      }
+      continue;
+    }
+
+    const existedIndex = edges.findIndex((edge) => edge.id === operation.edgeId);
+    if (existedIndex < 0) {
+      throwCoreError(
+        createValidationError("待删除边不存在", {
+          operationIndex: index,
+          operationType: operation.type,
+          edgeId: operation.edgeId,
+        }),
+      );
+    }
+
+    edges.splice(existedIndex, 1);
+  }
+
+  return { nodes, edges };
 }
 
 function topoSortFromNormalizedEdges(

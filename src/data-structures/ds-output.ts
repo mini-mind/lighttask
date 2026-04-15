@@ -2,59 +2,53 @@ import { cloneOptional } from "./ds-clone";
 import type { StructuredEntityExtensions } from "./ds-extension";
 import type { RevisionState } from "./ds-revision";
 import { createInitialRevision } from "./ds-revision";
-import type { RuntimeLifecycleStatus } from "./ds-status";
 
-export interface RuntimeParentRef extends Record<string, unknown> {
+export type OutputLifecycleStatus = "open" | "sealed";
+
+export interface OutputRuntimeRef extends Record<string, unknown> {
+  id: string;
+}
+
+export interface OutputOwnerRef extends Record<string, unknown> {
   kind: string;
   id: string;
 }
 
-export interface RuntimeOwnerRef extends Record<string, unknown> {
-  kind: string;
-  id: string;
-}
-
-export interface RuntimeRecord extends RevisionState {
+export interface OutputRecord extends RevisionState {
   id: string;
   kind: string;
-  title: string;
-  status: RuntimeLifecycleStatus;
-  parentRef?: RuntimeParentRef;
-  ownerRef?: RuntimeOwnerRef;
-  context?: Record<string, unknown>;
-  result?: Record<string, unknown>;
+  status: OutputLifecycleStatus;
+  runtimeRef?: OutputRuntimeRef;
+  ownerRef?: OutputOwnerRef;
+  payload?: Record<string, unknown>;
   createdAt: string;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
 }
 
-export interface CreateRuntimeRecordInput {
+export interface CreateOutputRecordInput {
   id: string;
   kind: string;
-  title: string;
   createdAt: string;
-  status?: RuntimeLifecycleStatus;
-  parentRef?: RuntimeParentRef;
-  ownerRef?: RuntimeOwnerRef;
-  context?: Record<string, unknown>;
-  result?: Record<string, unknown>;
+  status?: OutputLifecycleStatus;
+  runtimeRef?: OutputRuntimeRef;
+  ownerRef?: OutputOwnerRef;
+  payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
   idempotencyKey?: string;
 }
 
-export function createRuntimeRecord(input: CreateRuntimeRecordInput): RuntimeRecord {
+export function createOutputRecord(input: CreateOutputRecordInput): OutputRecord {
   const revision = createInitialRevision(input.createdAt, input.idempotencyKey);
 
   return {
     id: input.id,
     kind: input.kind.trim(),
-    title: input.title.trim(),
-    status: input.status ?? "queued",
-    parentRef: cloneOptional(input.parentRef),
+    status: input.status ?? "open",
+    runtimeRef: cloneOptional(input.runtimeRef),
     ownerRef: cloneOptional(input.ownerRef),
-    context: cloneOptional(input.context),
-    result: cloneOptional(input.result),
+    payload: cloneOptional(input.payload),
     createdAt: input.createdAt,
     updatedAt: revision.updatedAt,
     revision: revision.revision,

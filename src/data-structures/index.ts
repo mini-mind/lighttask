@@ -44,10 +44,20 @@ export { createPlanSessionRecord } from "./ds-plan";
 
 export type {
   RuntimeParentRef,
+  RuntimeOwnerRef,
   RuntimeRecord,
   CreateRuntimeRecordInput,
 } from "./ds-runtime";
 export { createRuntimeRecord } from "./ds-runtime";
+
+export type {
+  OutputLifecycleStatus,
+  OutputRuntimeRef,
+  OutputOwnerRef,
+  OutputRecord,
+  CreateOutputRecordInput,
+} from "./ds-output";
+export { createOutputRecord } from "./ds-output";
 
 export type {
   DependencyKind,

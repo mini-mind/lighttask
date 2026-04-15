@@ -320,3 +320,50 @@ test("LightTask Launch API 返回结果与内部计划图任务快照隔离", ()
     },
   });
 });
+
+test("LightTask Launch API 默认沿用 keep 治理策略", () => {
+  const lighttask = createLaunchTestLightTask();
+  lighttask.createPlan({
+    id: "plan_launch_keep_policy",
+    title: "发射保留旧物化任务",
+  });
+  lighttask.advancePlan("plan_launch_keep_policy", { expectedRevision: 1 });
+  lighttask.advancePlan("plan_launch_keep_policy", { expectedRevision: 2 });
+  lighttask.saveGraph("plan_launch_keep_policy", {
+    nodes: [
+      { id: "node_a", taskId: "graph_task_a", label: "任务 A" },
+      { id: "node_b", taskId: "graph_task_b", label: "任务 B" },
+    ],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_launch_keep_policy", {
+    expectedRevision: 1,
+  });
+  lighttask.materializePlanTasks("plan_launch_keep_policy", {
+    expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
+  });
+  lighttask.saveGraph("plan_launch_keep_policy", {
+    expectedRevision: 1,
+    nodes: [{ id: "node_a", taskId: "graph_task_a", label: "任务 A" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_launch_keep_policy", {
+    expectedRevision: 2,
+  });
+
+  const result = lighttask.launchPlan("plan_launch_keep_policy", {
+    expectedRevision: 3,
+    expectedPublishedGraphRevision: 2,
+  });
+  const listed = lighttask.listTasksByPlan("plan_launch_keep_policy");
+
+  assert.equal(result.plan.status, "confirmed");
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].title, "任务 A");
+  assert.equal(listed.length, 2);
+  assert.equal(
+    listed.some((task) => task.title === "任务 B"),
+    true,
+  );
+});

@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  LightTaskError,
-  type LightTaskGraph,
-  type LightTaskTask,
-  createLightTask,
-} from "../index";
+import { LightTaskError, type LightTaskGraph, type LightTaskTask, createLightTask } from "../index";
 import { createInMemoryTaskRepository } from "../ports/in-memory";
 import { createTestLightTaskOptions } from "./ports-fixture";
 
@@ -151,9 +146,11 @@ test("LightTask Materialize API 重复调用同一已发布 revision 时保持�
 
   const first = lighttask.materializePlanTasks("plan_materialize_idempotent", {
     expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
   });
   const second = lighttask.materializePlanTasks("plan_materialize_idempotent", {
     expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
   });
 
   assert.deepEqual(
@@ -324,6 +321,120 @@ test("LightTask Materialize API 会结构化同步物化任务且不推进运行
   assert.equal(advanced.status, "dispatched");
 });
 
+test("LightTask Materialize API 只同步图权威字段并保护任务实例字段", () => {
+  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
+  taskRepository.create({
+    id: "task_materialized_seed",
+    planId: "plan_materialize_boundary",
+    title: "旧标题",
+    summary: "旧摘要",
+    status: "dispatched",
+    revision: 4,
+    idempotencyKey: "task_materialized_seed_key",
+    createdAt: "2026-04-01T00:00:00.000Z",
+    steps: [
+      {
+        id: "task_materialized_seed_investigate",
+        title: "调查",
+        stage: "investigate",
+        status: "done",
+      },
+      {
+        id: "task_materialized_seed_design",
+        title: "设计",
+        stage: "design",
+        status: "doing",
+      },
+    ],
+    metadata: { owner: "legacy" },
+    extensions: {
+      properties: { priority: "p9" },
+      namespaces: {
+        lighttask: {
+          kind: "materialized_plan_task",
+          source: {
+            graphScope: "published",
+            graphRevision: 1,
+            nodeId: "node_boundary",
+            nodeTaskId: "graph_task_boundary_v1",
+          },
+        },
+        legacy: { preserved: false },
+      },
+    },
+    lastAdvanceFingerprint: "fingerprint_boundary",
+  });
+  const lighttask = createMaterializeTestLightTask({
+    taskRepository,
+  });
+  lighttask.createPlan({
+    id: "plan_materialize_boundary",
+    title: "同步边界",
+  });
+  lighttask.saveGraph("plan_materialize_boundary", {
+    nodes: [
+      {
+        id: "node_boundary",
+        taskId: "graph_task_boundary_v2",
+        label: "新标题",
+        metadata: { owner: "graph" },
+        extensions: {
+          properties: { priority: "p1" },
+          namespaces: { planner: { source: "published" } },
+        },
+      },
+    ],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_boundary", {
+    expectedRevision: 1,
+  });
+
+  const result = lighttask.materializePlanTasks("plan_materialize_boundary", {
+    expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
+  });
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].id, "task_materialized_seed");
+  assert.equal(result.tasks[0].title, "新标题");
+  assert.equal(result.tasks[0].summary, undefined);
+  assert.deepEqual(result.tasks[0].metadata, { owner: "graph" });
+  assert.deepEqual(result.tasks[0].extensions, {
+    properties: { priority: "p1" },
+    namespaces: {
+      planner: { source: "published" },
+      lighttask: {
+        kind: "materialized_plan_task",
+        source: {
+          graphScope: "published",
+          graphRevision: 1,
+          nodeId: "node_boundary",
+          nodeTaskId: "graph_task_boundary_v2",
+        },
+      },
+    },
+  });
+  assert.equal(result.tasks[0].status, "dispatched");
+  assert.equal(result.tasks[0].createdAt, "2026-04-01T00:00:00.000Z");
+  assert.equal(result.tasks[0].revision, 5);
+  assert.equal(result.tasks[0].idempotencyKey, "task_materialized_seed_key");
+  assert.deepEqual(result.tasks[0].steps, [
+    {
+      id: "task_materialized_seed_investigate",
+      title: "调查",
+      stage: "investigate",
+      status: "done",
+    },
+    {
+      id: "task_materialized_seed_design",
+      title: "设计",
+      stage: "design",
+      status: "doing",
+    },
+  ]);
+});
+
 test("LightTask Materialize API 不删除已从新发布图移除的旧物化任务", () => {
   const lighttask = createMaterializeTestLightTask();
   lighttask.createPlan({
@@ -342,6 +453,7 @@ test("LightTask Materialize API 不删除已从新发布图移除的旧物化任
   });
   const first = lighttask.materializePlanTasks("plan_materialize_no_delete", {
     expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
   });
 
   lighttask.saveGraph("plan_materialize_no_delete", {
@@ -355,15 +467,32 @@ test("LightTask Materialize API 不删除已从新发布图移除的旧物化任
 
   const second = lighttask.materializePlanTasks("plan_materialize_no_delete", {
     expectedPublishedGraphRevision: 2,
+    removedNodePolicy: "keep",
   });
   const listed = lighttask.listTasksByPlan("plan_materialize_no_delete");
 
   assert.equal(second.tasks.length, 1);
   assert.equal(second.tasks[0].id, first.tasks[0].id);
+  assert.equal(
+    second.tasks.some((task) => task.id === first.tasks[1].id),
+    false,
+  );
   assert.equal(listed.length, 2);
   assert.equal(
     listed.some((task) => task.id === first.tasks[1].id && task.title === "任务 B"),
     true,
+  );
+  assert.deepEqual(
+    listed.find((task) => task.id === first.tasks[1].id)?.extensions?.namespaces?.lighttask,
+    {
+      kind: "materialized_plan_task",
+      source: {
+        graphScope: "published",
+        graphRevision: 1,
+        nodeId: "node_b",
+        nodeTaskId: "graph_task_b",
+      },
+    },
   );
 });
 
@@ -471,6 +600,36 @@ test("LightTask Materialize API 对空白 planId、缺失计划与空白节点�
         planId: "plan_materialize_blank_label",
         nodeId: "node_blank",
         label: "   ",
+      },
+    },
+  );
+});
+
+test("LightTask Materialize API 仅支持 keep removedNodePolicy", () => {
+  const lighttask = createMaterializeTestLightTask();
+  lighttask.createPlan({
+    id: "plan_materialize_invalid_policy",
+    title: "非法治理策略",
+  });
+  lighttask.saveGraph("plan_materialize_invalid_policy", {
+    nodes: [{ id: "node_1", taskId: "graph_task_1", label: "任务一" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_invalid_policy", {
+    expectedRevision: 1,
+  });
+
+  expectLightTaskError(
+    () =>
+      lighttask.materializePlanTasks("plan_materialize_invalid_policy", {
+        expectedPublishedGraphRevision: 1,
+        removedNodePolicy: "archive" as unknown as "keep",
+      }),
+    {
+      code: "VALIDATION_ERROR",
+      message: "removedNodePolicy 仅支持 keep",
+      details: {
+        removedNodePolicy: "archive",
       },
     },
   );

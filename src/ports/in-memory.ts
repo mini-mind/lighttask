@@ -3,6 +3,7 @@ import { createCoreError } from "../data-structures";
 import type { DomainEvent } from "../data-structures";
 import type { GraphRepository, GraphSnapshotScope } from "./port-graph-repo";
 import type { NotifyPort } from "./port-notify";
+import type { OutputRepository } from "./port-output-repo";
 import type { PlanRepository } from "./port-plan-repo";
 import type { RuntimeRepository } from "./port-runtime-repo";
 import type { ClockPort, IdGeneratorPort } from "./port-system";
@@ -228,6 +229,46 @@ export function createInMemoryRuntimeRepository<
       return {
         ok: true as const,
         runtime: saved.record,
+      };
+    },
+  };
+}
+
+export function createInMemoryOutputRepository<
+  TOutput extends KeyedRevisionRecord,
+>(): OutputRepository<TOutput> {
+  const repository = createInMemoryKeyedRepository<TOutput>({
+    entityName: "输出",
+    entityIdLabel: "outputId",
+  });
+
+  return {
+    list() {
+      return repository.list();
+    },
+    get(outputId) {
+      return repository.get(outputId);
+    },
+    create(output) {
+      const created = repository.create(output);
+      if (!created.ok) {
+        return created;
+      }
+
+      return {
+        ok: true as const,
+        output: created.record,
+      };
+    },
+    saveIfRevisionMatches(output, expectedRevision) {
+      const saved = repository.saveIfRevisionMatches(output, expectedRevision);
+      if (!saved.ok) {
+        return saved;
+      }
+
+      return {
+        ok: true as const,
+        output: saved.record,
       };
     },
   };

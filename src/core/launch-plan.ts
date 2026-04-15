@@ -5,6 +5,7 @@ import {
   throwLightTaskError,
 } from "./lighttask-error";
 import { materializePlanTasksUseCase } from "./materialize-plan-tasks";
+import { publishPlanLaunchedEvent, resolveNotifyPublisher } from "./notify-event";
 import type { CreateLightTaskOptions, LaunchPlanInput, LaunchPlanResult } from "./types";
 
 function assertPlanId(planId: string): string {
@@ -26,6 +27,7 @@ export function launchPlanUseCase(
   planId: string,
   input: LaunchPlanInput,
 ): LaunchPlanResult {
+  const publishEvent = resolveNotifyPublisher(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const normalizedPlanId = assertPlanId(planId);
   const storedPlan = getPlan(normalizedPlanId);
@@ -67,15 +69,19 @@ export function launchPlanUseCase(
 
   const materialized = materializePlanTasksUseCase(options, normalizedPlanId, {
     expectedPublishedGraphRevision: input.expectedPublishedGraphRevision,
+    removedNodePolicy: "keep",
   });
   const confirmedPlan = advancePlanUseCase(options, normalizedPlanId, {
     expectedRevision: input.expectedRevision,
     action: "confirm",
   });
 
-  return {
+  const result = {
     plan: confirmedPlan,
     publishedGraph: materialized.publishedGraph,
     tasks: materialized.tasks,
   };
+
+  publishPlanLaunchedEvent(publishEvent, result);
+  return result;
 }

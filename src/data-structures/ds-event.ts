@@ -6,12 +6,16 @@ export type DomainEventType =
   | "plan.created"
   | "plan.updated"
   | "plan.advanced"
+  | "plan.tasks_materialized"
+  | "plan.launched"
   | "graph.saved"
   | "graph.published"
   | "runtime.created"
-  | "runtime.advanced";
+  | "runtime.advanced"
+  | "output.created"
+  | "output.advanced";
 
-export type DomainEventAggregate = "task" | "plan" | "graph" | "runtime";
+export type DomainEventAggregate = "task" | "plan" | "graph" | "runtime" | "output";
 
 export interface DomainEvent<
   TType extends DomainEventType = DomainEventType,

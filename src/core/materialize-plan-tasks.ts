@@ -7,12 +7,14 @@ import {
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
+import { publishPlanTasksMaterializedEvent, resolveNotifyPublisher } from "./notify-event";
 import { toPublicPlan } from "./plan-snapshot";
 import { clonePersistedTask, createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
   MaterializePlanTasksInput,
   MaterializePlanTasksResult,
+  MaterializeRemovedNodePolicy,
   MaterializedPlanTaskProvenance,
   PersistedLightTask,
 } from "./types";
@@ -20,6 +22,26 @@ import type {
 const PUBLISHED_GRAPH_SCOPE = "published" as const;
 const MATERIALIZE_NAMESPACE = "lighttask";
 const MATERIALIZE_KIND = "materialized_plan_task" as const;
+const DEFAULT_REMOVED_NODE_POLICY = "keep" as const;
+const MATERIALIZED_TASK_SYNC_BOUNDARY = {
+  // 这些字段由已发布图定义，重复物化时允许被结构性覆盖。
+  syncable: ["planId", "title", "summary", "metadata", "extensions"] as const,
+  // 这些字段属于任务实例自身，物化不应改写。
+  protected: [
+    "id",
+    "status",
+    "steps",
+    "createdAt",
+    "revision",
+    "idempotencyKey",
+    "lastAdvanceFingerprint",
+  ] as const,
+} as const;
+
+type MaterializedTaskSyncableFields = Pick<
+  PersistedLightTask,
+  (typeof MATERIALIZED_TASK_SYNC_BOUNDARY.syncable)[number]
+>;
 
 function assertPlanId(planId: string): string {
   const normalizedPlanId = planId.trim();
@@ -39,10 +61,7 @@ function assertExpectedPublishedGraphRevision(
   currentPublishedGraphRevision: number,
   expectedPublishedGraphRevision: number,
 ): void {
-  if (
-    !Number.isInteger(expectedPublishedGraphRevision) ||
-    expectedPublishedGraphRevision < 1
-  ) {
+  if (!Number.isInteger(expectedPublishedGraphRevision) || expectedPublishedGraphRevision < 1) {
     throwLightTaskError(
       createLightTaskError(
         "VALIDATION_ERROR",
@@ -66,6 +85,21 @@ function assertExpectedPublishedGraphRevision(
       ),
     );
   }
+}
+
+function resolveRemovedNodePolicy(input: MaterializePlanTasksInput): MaterializeRemovedNodePolicy {
+  const removedNodePolicy = input.removedNodePolicy ?? DEFAULT_REMOVED_NODE_POLICY;
+
+  if (removedNodePolicy !== DEFAULT_REMOVED_NODE_POLICY) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "removedNodePolicy 仅支持 keep", {
+        removedNodePolicy,
+        supportedRemovedNodePolicies: [DEFAULT_REMOVED_NODE_POLICY],
+      }),
+    );
+  }
+
+  return removedNodePolicy;
 }
 
 function createMaterializedTaskProvenance(
@@ -187,7 +221,7 @@ function assertNodeTitle(planId: string, nodeId: string, label: string): string 
 
 function hasStructuralChanges(
   task: PersistedLightTask,
-  nextTaskFields: Pick<PersistedLightTask, "planId" | "title" | "summary" | "metadata" | "extensions">,
+  nextTaskFields: MaterializedTaskSyncableFields,
 ): boolean {
   return (
     task.planId !== nextTaskFields.planId ||
@@ -198,11 +232,34 @@ function hasStructuralChanges(
   );
 }
 
+function applyMaterializedTaskSyncableFields(
+  task: PersistedLightTask,
+  nextTaskFields: MaterializedTaskSyncableFields,
+): void {
+  task.planId = nextTaskFields.planId;
+  task.title = nextTaskFields.title;
+  task.summary = nextTaskFields.summary;
+  task.metadata = nextTaskFields.metadata;
+  task.extensions = nextTaskFields.extensions;
+}
+
+function finalizeMaterializedTasksResult(
+  tasks: MaterializePlanTasksResult["tasks"],
+  removedNodePolicy: MaterializeRemovedNodePolicy,
+): MaterializePlanTasksResult["tasks"] {
+  switch (removedNodePolicy) {
+    case "keep":
+      // keep 策略只返回当前已发布图仍存在的节点；已移除节点对应旧任务继续留在仓储中。
+      return tasks;
+  }
+}
+
 export function materializePlanTasksUseCase(
   options: CreateLightTaskOptions,
   planId: string,
   input: MaterializePlanTasksInput,
 ): MaterializePlanTasksResult {
+  const publishEvent = resolveNotifyPublisher(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const getGraph = requireLightTaskFunction(options.graphRepository?.get, "graphRepository.get");
   const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
@@ -217,6 +274,7 @@ export function materializePlanTasksUseCase(
     );
   }
 
+  const removedNodePolicy = resolveRemovedNodePolicy(input);
   const publishedGraph = getGraph(normalizedPlanId, PUBLISHED_GRAPH_SCOPE);
   if (!publishedGraph) {
     throwLightTaskError(
@@ -252,10 +310,7 @@ export function materializePlanTasksUseCase(
         node.extensions,
         createMaterializedTaskProvenance(publishedGraph.revision, node.id, node.taskId),
       ),
-    } satisfies Pick<
-      PersistedLightTask,
-      "planId" | "title" | "summary" | "metadata" | "extensions"
-    >;
+    } satisfies MaterializedTaskSyncableFields;
     const existedTask = tasksByNodeId.get(node.id);
 
     if (!existedTask) {
@@ -312,11 +367,7 @@ export function materializePlanTasksUseCase(
       "taskRepository.saveIfRevisionMatches",
     );
     const nextTask = clonePersistedTask(existedTask);
-    nextTask.planId = nextTaskFields.planId;
-    nextTask.title = nextTaskFields.title;
-    nextTask.summary = nextTaskFields.summary;
-    nextTask.metadata = nextTaskFields.metadata;
-    nextTask.extensions = nextTaskFields.extensions;
+    applyMaterializedTaskSyncableFields(nextTask, nextTaskFields);
     nextTask.revision = existedTask.revision + 1;
 
     const saved = saveIfRevisionMatches(nextTask, existedTask.revision);
@@ -327,9 +378,12 @@ export function materializePlanTasksUseCase(
     materializedTasks.push(toPublicTask(saved.task));
   }
 
-  return {
+  const result = {
     plan: toPublicPlan(storedPlan),
     publishedGraph: toPublicGraph(publishedGraph),
-    tasks: materializedTasks,
+    tasks: finalizeMaterializedTasksResult(materializedTasks, removedNodePolicy),
   };
+
+  publishPlanTasksMaterializedEvent(publishEvent, result);
+  return result;
 }

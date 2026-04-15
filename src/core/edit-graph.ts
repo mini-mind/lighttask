@@ -1,6 +1,10 @@
-import { bumpRevision, createGraphSnapshot } from "../data-structures";
-import { assertExpectedRevision, assertNextRevision, validateDagSnapshot } from "../rules";
-import { cloneOptional, cloneValue } from "./clone";
+import { bumpRevision } from "../data-structures";
+import {
+  applyGraphEditOperations,
+  assertExpectedRevision,
+  assertNextRevision,
+  validateDagSnapshot,
+} from "../rules";
 import { toPublicGraph } from "./graph-snapshot";
 import {
   createLightTaskError,
@@ -10,9 +14,9 @@ import {
 import { publishGraphSavedEvent, resolveNotifyPublisher } from "./notify-event";
 import type {
   CreateLightTaskOptions,
+  EditGraphInput,
   LightTaskGraph,
   PersistedLightGraph,
-  SaveGraphInput,
 } from "./types";
 
 const DRAFT_GRAPH_SCOPE = "draft" as const;
@@ -31,10 +35,10 @@ function assertPlanId(planId: string): string {
   return normalizedPlanId;
 }
 
-function assertGraphInput(planId: string, input: SaveGraphInput): void {
+function assertEditedGraph(planId: string, graph: PersistedLightGraph): void {
   const validation = validateDagSnapshot({
-    nodes: input.nodes,
-    edges: input.edges,
+    nodes: graph.nodes,
+    edges: graph.edges,
   });
 
   if (!validation.ok) {
@@ -47,68 +51,29 @@ function assertGraphInput(planId: string, input: SaveGraphInput): void {
   }
 }
 
-export function saveGraphUseCase(
+export function editGraphUseCase(
   options: CreateLightTaskOptions,
   planId: string,
-  input: SaveGraphInput,
+  input: EditGraphInput,
 ): LightTaskGraph {
   const publishEvent = resolveNotifyPublisher(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const getGraph = requireLightTaskFunction(options.graphRepository?.get, "graphRepository.get");
   const normalizedPlanId = assertPlanId(planId);
   const plan = getPlan(normalizedPlanId);
+
   if (!plan) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到计划，无法保存图快照", {
+      createLightTaskError("NOT_FOUND", "未找到计划，无法编辑图快照", {
         planId: normalizedPlanId,
       }),
     );
   }
-  assertGraphInput(normalizedPlanId, input);
 
   const storedGraph = getGraph(normalizedPlanId, DRAFT_GRAPH_SCOPE);
-  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
-
   if (!storedGraph) {
-    const createGraph = requireLightTaskFunction(
-      options.graphRepository?.create,
-      "graphRepository.create",
-    );
-    const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
-    if (input.expectedRevision !== undefined) {
-      throwLightTaskError(
-        createLightTaskError("VALIDATION_ERROR", "首次保存图快照时不应传 expectedRevision", {
-          planId: normalizedPlanId,
-          expectedRevision: input.expectedRevision,
-        }),
-      );
-    }
-
-    const created = createGraph(
-      normalizedPlanId,
-      createGraphSnapshot({
-        nodes: input.nodes,
-        edges: input.edges,
-        createdAt: clockNow(),
-        metadata: input.metadata,
-        extensions: input.extensions,
-        idempotencyKey: normalizedIdempotencyKey,
-      }),
-      DRAFT_GRAPH_SCOPE,
-    );
-
-    if (!created.ok) {
-      throwLightTaskError(created.error);
-    }
-
-    const publicGraph = toPublicGraph(created.graph);
-    publishGraphSavedEvent(publishEvent, normalizedPlanId, publicGraph);
-    return publicGraph;
-  }
-
-  if (input.expectedRevision === undefined) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "更新图快照时 expectedRevision 为必填字段", {
+      createLightTaskError("NOT_FOUND", "未找到图草稿，无法编辑图快照", {
         planId: normalizedPlanId,
       }),
     );
@@ -117,22 +82,27 @@ export function saveGraphUseCase(
   assertExpectedRevision(storedGraph.revision, input.expectedRevision);
   assertNextRevision(storedGraph.revision, storedGraph.revision + 1);
 
-  const saveIfRevisionMatches = requireLightTaskFunction(
-    options.graphRepository?.saveIfRevisionMatches,
-    "graphRepository.saveIfRevisionMatches",
-  );
+  const edited = applyGraphEditOperations(storedGraph, input.operations);
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const nextRevision = bumpRevision(storedGraph, clockNow(), normalizedIdempotencyKey);
   const nextGraph: PersistedLightGraph = {
-    nodes: cloneValue(input.nodes),
-    edges: cloneValue(input.edges),
+    ...edited,
     createdAt: storedGraph.createdAt,
-    metadata: cloneOptional(input.metadata),
-    extensions: cloneOptional(input.extensions),
+    metadata: structuredClone(storedGraph.metadata),
+    extensions: structuredClone(storedGraph.extensions),
     updatedAt: nextRevision.updatedAt,
     revision: nextRevision.revision,
     idempotencyKey: nextRevision.idempotencyKey,
   };
+
+  // 增量编辑先在规则层顺序应用补丁，再统一对结果草稿做一次 DAG 校验。
+  assertEditedGraph(normalizedPlanId, nextGraph);
+
+  const saveIfRevisionMatches = requireLightTaskFunction(
+    options.graphRepository?.saveIfRevisionMatches,
+    "graphRepository.saveIfRevisionMatches",
+  );
   const saved = saveIfRevisionMatches(
     normalizedPlanId,
     nextGraph,

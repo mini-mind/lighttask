@@ -7,11 +7,16 @@ import type {
   GraphSavedEvent,
   LightTaskDomainEvent,
   LightTaskGraph,
+  LightTaskOutput,
   LightTaskPlan,
   LightTaskRuntime,
   LightTaskTask,
+  OutputAdvancedEvent,
+  OutputCreatedEvent,
   PlanAdvancedEvent,
   PlanCreatedEvent,
+  PlanLaunchedEvent,
+  PlanTasksMaterializedEvent,
   PlanUpdatedEvent,
   RuntimeAdvancedEvent,
   RuntimeCreatedEvent,
@@ -62,6 +67,35 @@ function createPlanEvent<
   }) as Extract<LightTaskDomainEvent, { type: TType }>;
 }
 
+function createPlanOrchestrationEvent<
+  TType extends PlanTasksMaterializedEvent["type"] | PlanLaunchedEvent["type"],
+>(
+  type: TType,
+  input: {
+    plan: LightTaskPlan;
+    publishedGraph: LightTaskGraph;
+    tasks: LightTaskTask[];
+    revision: number;
+    occurredAt: string;
+    idempotencyKey?: string;
+  },
+): Extract<LightTaskDomainEvent, { type: TType }> {
+  return createDomainEvent({
+    id: createEventId(type, input.plan.id, input.revision),
+    type,
+    aggregate: "plan",
+    aggregateId: input.plan.id,
+    occurredAt: input.occurredAt,
+    revision: input.revision,
+    idempotencyKey: input.idempotencyKey,
+    payload: {
+      plan: input.plan,
+      publishedGraph: input.publishedGraph,
+      tasks: input.tasks,
+    },
+  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+}
+
 function createGraphEvent<TType extends GraphSavedEvent["type"] | GraphPublishedEvent["type"]>(
   type: TType,
   planId: string,
@@ -96,6 +130,24 @@ function createRuntimeEvent<
     idempotencyKey: runtime.idempotencyKey,
     payload: {
       runtime,
+    },
+  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+}
+
+function createOutputEvent<TType extends OutputCreatedEvent["type"] | OutputAdvancedEvent["type"]>(
+  type: TType,
+  output: LightTaskOutput,
+): Extract<LightTaskDomainEvent, { type: TType }> {
+  return createDomainEvent({
+    id: createEventId(type, output.id, output.revision),
+    type,
+    aggregate: "output",
+    aggregateId: output.id,
+    occurredAt: output.updatedAt,
+    revision: output.revision,
+    idempotencyKey: output.idempotencyKey,
+    payload: {
+      output,
     },
   }) as Extract<LightTaskDomainEvent, { type: TType }>;
 }
@@ -153,6 +205,44 @@ export function publishPlanAdvancedEvent(
   return event;
 }
 
+export function publishPlanTasksMaterializedEvent(
+  publish: EventPublisher,
+  input: {
+    plan: LightTaskPlan;
+    publishedGraph: LightTaskGraph;
+    tasks: LightTaskTask[];
+  },
+): PlanTasksMaterializedEvent {
+  const event = createPlanOrchestrationEvent("plan.tasks_materialized", {
+    ...input,
+    // 首个编排事件切片将 revision 绑定到已发布图 revision，便于消费者感知物化来源图版本。
+    revision: input.publishedGraph.revision,
+    occurredAt: input.publishedGraph.updatedAt,
+    idempotencyKey: input.publishedGraph.idempotencyKey,
+  });
+  publish(event);
+  return event;
+}
+
+export function publishPlanLaunchedEvent(
+  publish: EventPublisher,
+  input: {
+    plan: LightTaskPlan;
+    publishedGraph: LightTaskGraph;
+    tasks: LightTaskTask[];
+  },
+): PlanLaunchedEvent {
+  const event = createPlanOrchestrationEvent("plan.launched", {
+    ...input,
+    // launched 绑定确认后的计划 revision，表示 ready -> confirmed 的闭环已完成。
+    revision: input.plan.revision,
+    occurredAt: input.plan.updatedAt,
+    idempotencyKey: input.plan.idempotencyKey,
+  });
+  publish(event);
+  return event;
+}
+
 export function publishGraphSavedEvent(
   publish: EventPublisher,
   planId: string,
@@ -187,6 +277,24 @@ export function publishRuntimeAdvancedEvent(
   runtime: LightTaskRuntime,
 ): RuntimeAdvancedEvent {
   const event = createRuntimeEvent("runtime.advanced", runtime);
+  publish(event);
+  return event;
+}
+
+export function publishOutputCreatedEvent(
+  publish: EventPublisher,
+  output: LightTaskOutput,
+): OutputCreatedEvent {
+  const event = createOutputEvent("output.created", output);
+  publish(event);
+  return event;
+}
+
+export function publishOutputAdvancedEvent(
+  publish: EventPublisher,
+  output: LightTaskOutput,
+): OutputAdvancedEvent {
+  const event = createOutputEvent("output.advanced", output);
   publish(event);
   return event;
 }

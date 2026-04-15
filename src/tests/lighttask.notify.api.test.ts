@@ -96,6 +96,110 @@ test("LightTask Notify API 在 plan create/update/advance 成功后分别发布�
   assert.equal(advancedEvent.payload.plan.status, "planning");
 });
 
+test("LightTask Notify API 在 materializePlanTasks 成功后发布 plan.tasks_materialized 快照事件", () => {
+  const notify = createInMemoryNotifyCollector<LightTaskDomainEvent>();
+  const lighttask = createLightTask(createTestLightTaskOptions({ notify }));
+  lighttask.createPlan({
+    id: "plan_materialize_notify",
+    title: "物化通知",
+  });
+  lighttask.saveGraph("plan_materialize_notify", {
+    nodes: [
+      {
+        id: "node_materialize_notify_1",
+        taskId: "graph_task_materialize_notify_1",
+        label: "任务一",
+        metadata: { owner: { name: "graph" } },
+      },
+    ],
+    edges: [],
+    metadata: {
+      channel: { name: "published" },
+    },
+  });
+  lighttask.publishGraph("plan_materialize_notify", {
+    expectedRevision: 1,
+  });
+  notify.clear();
+
+  const result = lighttask.materializePlanTasks("plan_materialize_notify", {
+    expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
+  });
+
+  const firstRead = notify.listPublished();
+  assert.deepEqual(
+    firstRead.map((event) => event.type),
+    ["plan.tasks_materialized"],
+  );
+  const event = getEventByType(firstRead, "plan.tasks_materialized");
+  assert.equal(event.aggregate, "plan");
+  assert.equal(event.aggregateId, "plan_materialize_notify");
+  assert.equal(event.revision, 1);
+  assert.equal(event.id, "plan.tasks_materialized:plan_materialize_notify:r1");
+  assert.equal(event.payload.plan.status, "draft");
+  assert.equal(event.payload.publishedGraph.revision, 1);
+  assert.equal(event.payload.tasks.length, 1);
+  assert.equal(event.payload.tasks[0].title, "任务一");
+
+  result.plan.title = "外部篡改计划";
+  result.publishedGraph.nodes[0].label = "外部篡改节点";
+  result.tasks[0].title = "外部篡改任务";
+  event.payload.plan.title = "再次篡改计划";
+  event.payload.publishedGraph.nodes[0].label = "再次篡改节点";
+  event.payload.tasks[0].title = "再次篡改任务";
+
+  const secondRead = notify.listPublished();
+  const reloadedEvent = getEventByType(secondRead, "plan.tasks_materialized");
+  assert.equal(reloadedEvent.payload.plan.title, "物化通知");
+  assert.equal(reloadedEvent.payload.publishedGraph.nodes[0].label, "任务一");
+  assert.equal(reloadedEvent.payload.tasks[0].title, "任务一");
+  assert.deepEqual(reloadedEvent.payload.tasks[0].metadata, {
+    owner: { name: "graph" },
+  });
+});
+
+test("LightTask Notify API 对同一已发布图 revision 的重复 materialize 发布稳定事件 ID", () => {
+  const notify = createInMemoryNotifyCollector<LightTaskDomainEvent>();
+  const lighttask = createLightTask(createTestLightTaskOptions({ notify }));
+  lighttask.createPlan({
+    id: "plan_materialize_notify_idempotent",
+    title: "幂等物化通知",
+  });
+  lighttask.saveGraph("plan_materialize_notify_idempotent", {
+    nodes: [{ id: "node_1", taskId: "graph_task_1", label: "任务一" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_materialize_notify_idempotent", {
+    expectedRevision: 1,
+  });
+  notify.clear();
+
+  lighttask.materializePlanTasks("plan_materialize_notify_idempotent", {
+    expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
+  });
+  lighttask.materializePlanTasks("plan_materialize_notify_idempotent", {
+    expectedPublishedGraphRevision: 1,
+    removedNodePolicy: "keep",
+  });
+
+  const events = notify.listPublished();
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["plan.tasks_materialized", "plan.tasks_materialized"],
+  );
+  const [firstEvent, secondEvent] = events as [
+    Extract<LightTaskDomainEvent, { type: "plan.tasks_materialized" }>,
+    Extract<LightTaskDomainEvent, { type: "plan.tasks_materialized" }>,
+  ];
+  assert.equal(firstEvent.id, "plan.tasks_materialized:plan_materialize_notify_idempotent:r1");
+  assert.equal(secondEvent.id, firstEvent.id);
+  assert.equal(firstEvent.revision, 1);
+  assert.equal(secondEvent.revision, 1);
+  assert.deepEqual(secondEvent.payload.tasks, firstEvent.payload.tasks);
+});
+
 test("LightTask Notify API 在 graph save/publish 成功后发布隔离快照", () => {
   const notify = createInMemoryNotifyCollector<LightTaskDomainEvent>();
   const lighttask = createLightTask(createTestLightTaskOptions({ notify }));
@@ -177,4 +281,86 @@ test("LightTask Notify API 在 runtime create/advance 成功后发布事件", ()
   assert.equal(events[0].aggregateId, "runtime_notify");
   const advancedEvent = getEventByType(events, "runtime.advanced");
   assert.equal(advancedEvent.payload.runtime.status, "running");
+});
+
+test("LightTask Notify API 在 output create/advance 成功后发布事件", () => {
+  const notify = createInMemoryNotifyCollector<LightTaskDomainEvent>();
+  const lighttask = createLightTask(createTestLightTaskOptions({ notify }));
+
+  lighttask.createOutput({
+    id: "output_notify",
+    kind: "summary",
+    runtimeRef: {
+      id: "runtime_notify_only_ref",
+    },
+  });
+  lighttask.advanceOutput("output_notify", {
+    expectedRevision: 1,
+  });
+
+  const events = notify.listPublished();
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["output.created", "output.advanced"],
+  );
+  assert.equal(events[0].aggregate, "output");
+  assert.equal(events[0].aggregateId, "output_notify");
+  const advancedEvent = getEventByType(events, "output.advanced");
+  assert.equal(advancedEvent.payload.output.status, "sealed");
+});
+
+test("LightTask Notify API 在 launchPlan 期间按顺序发布 plan 编排事件", () => {
+  const notify = createInMemoryNotifyCollector<LightTaskDomainEvent>();
+  const lighttask = createLightTask(createTestLightTaskOptions({ notify }));
+  lighttask.createPlan({
+    id: "plan_launch_notify",
+    title: "发射通知",
+  });
+  lighttask.advancePlan("plan_launch_notify", {
+    expectedRevision: 1,
+  });
+  lighttask.advancePlan("plan_launch_notify", {
+    expectedRevision: 2,
+  });
+  lighttask.saveGraph("plan_launch_notify", {
+    nodes: [{ id: "node_launch_notify_1", taskId: "graph_task_launch_1", label: "任务一" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_launch_notify", {
+    expectedRevision: 1,
+  });
+  notify.clear();
+
+  const launched = lighttask.launchPlan("plan_launch_notify", {
+    expectedRevision: 3,
+    expectedPublishedGraphRevision: 1,
+  });
+
+  const events = notify.listPublished();
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["plan.tasks_materialized", "plan.advanced", "plan.launched"],
+  );
+
+  const tasksMaterializedEvent = getEventByType(events, "plan.tasks_materialized");
+  const planAdvancedEvent = getEventByType(events, "plan.advanced");
+  const planLaunchedEvent = getEventByType(events, "plan.launched");
+
+  assert.equal(tasksMaterializedEvent.aggregate, "plan");
+  assert.equal(tasksMaterializedEvent.aggregateId, "plan_launch_notify");
+  assert.equal(tasksMaterializedEvent.revision, 1);
+  assert.equal(tasksMaterializedEvent.payload.plan.status, "ready");
+  assert.equal(tasksMaterializedEvent.payload.publishedGraph.revision, 1);
+  assert.equal(tasksMaterializedEvent.payload.tasks[0].status, "queued");
+
+  assert.equal(planAdvancedEvent.revision, 4);
+  assert.equal(planAdvancedEvent.payload.plan.status, "confirmed");
+
+  assert.equal(planLaunchedEvent.aggregate, "plan");
+  assert.equal(planLaunchedEvent.aggregateId, "plan_launch_notify");
+  assert.equal(planLaunchedEvent.revision, 4);
+  assert.equal(planLaunchedEvent.id, "plan.launched:plan_launch_notify:r4");
+  assert.equal(planLaunchedEvent.payload.plan.status, "confirmed");
+  assert.equal(planLaunchedEvent.payload.publishedGraph.revision, 1);
+  assert.equal(planLaunchedEvent.payload.tasks[0].id, launched.tasks[0].id);
 });

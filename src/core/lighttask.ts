@@ -1,16 +1,22 @@
+import { advanceOutputUseCase } from "./advance-output";
 import { advancePlanUseCase } from "./advance-plan";
 import { advanceRuntimeUseCase } from "./advance-runtime";
 import { advanceTaskUseCase } from "./advance-task";
+import { createOutputUseCase } from "./create-output";
 import { createPlanUseCase } from "./create-plan";
 import { createRuntimeUseCase } from "./create-runtime";
 import { createTaskUseCase } from "./create-task";
+import { editGraphUseCase } from "./edit-graph";
 import { getGraphUseCase } from "./get-graph";
+import { getOutputUseCase } from "./get-output";
 import { getPlanUseCase } from "./get-plan";
+import { getPlanSchedulingFactsUseCase } from "./get-plan-scheduling-facts";
 import { getPublishedGraphUseCase } from "./get-published-graph";
 import { getRuntimeUseCase } from "./get-runtime";
 import { getTaskUseCase } from "./get-task";
 import { launchPlanUseCase } from "./launch-plan";
 import { toLightTaskError } from "./lighttask-error";
+import { listOutputsUseCase } from "./list-outputs";
 import { listPlansUseCase } from "./list-plans";
 import { listRuntimesUseCase } from "./list-runtimes";
 import { listTasksUseCase } from "./list-tasks";
@@ -19,17 +25,23 @@ import { materializePlanTasksUseCase } from "./materialize-plan-tasks";
 import { publishGraphUseCase } from "./publish-graph";
 import { saveGraphUseCase } from "./save-graph";
 import type {
+  AdvanceOutputInput,
   AdvancePlanInput,
   AdvanceRuntimeInput,
   AdvanceTaskInput,
   CreateLightTaskOptions,
+  CreateOutputInput,
   CreatePlanInput,
   CreateRuntimeInput,
   CreateTaskInput,
+  EditGraphInput,
+  GetPlanSchedulingFactsInput,
+  GetPlanSchedulingFactsResult,
   LaunchPlanInput,
   LaunchPlanResult,
   LightTaskGraph,
   LightTaskKernel,
+  LightTaskOutput,
   LightTaskPlan,
   LightTaskRuntime,
   LightTaskTask,
@@ -103,12 +115,32 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => advanceRuntimeUseCase(this.options, runtimeId, input));
   }
 
+  createOutput(input: CreateOutputInput): LightTaskOutput {
+    return this.runWithErrorBoundary(() => createOutputUseCase(this.options, input));
+  }
+
+  listOutputs(): LightTaskOutput[] {
+    return this.runWithErrorBoundary(() => listOutputsUseCase(this.options));
+  }
+
+  getOutput(outputId: string): LightTaskOutput | undefined {
+    return this.runWithErrorBoundary(() => getOutputUseCase(this.options, outputId));
+  }
+
+  advanceOutput(outputId: string, input: AdvanceOutputInput): LightTaskOutput {
+    return this.runWithErrorBoundary(() => advanceOutputUseCase(this.options, outputId, input));
+  }
+
   getGraph(planId: string): LightTaskGraph | undefined {
     return this.runWithErrorBoundary(() => getGraphUseCase(this.options, planId));
   }
 
   saveGraph(planId: string, input: SaveGraphInput): LightTaskGraph {
     return this.runWithErrorBoundary(() => saveGraphUseCase(this.options, planId, input));
+  }
+
+  editGraph(planId: string, input: EditGraphInput): LightTaskGraph {
+    return this.runWithErrorBoundary(() => editGraphUseCase(this.options, planId, input));
   }
 
   getPublishedGraph(planId: string): LightTaskGraph | undefined {
@@ -125,6 +157,15 @@ class LightTaskKernelFacade implements LightTaskKernel {
   ): MaterializePlanTasksResult {
     return this.runWithErrorBoundary(() =>
       materializePlanTasksUseCase(this.options, planId, input),
+    );
+  }
+
+  getPlanSchedulingFacts(
+    planId: string,
+    input: GetPlanSchedulingFactsInput,
+  ): GetPlanSchedulingFactsResult {
+    return this.runWithErrorBoundary(() =>
+      getPlanSchedulingFactsUseCase(this.options, planId, input),
     );
   }
 

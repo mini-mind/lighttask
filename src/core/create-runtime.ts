@@ -1,4 +1,4 @@
-import { createRuntimeRecord } from "../data-structures";
+import { type RuntimeOwnerRef, createRuntimeRecord } from "../data-structures";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -12,6 +12,40 @@ import type {
   LightTaskRuntime,
   PersistedLightRuntime,
 } from "./types";
+
+function normalizeRuntimeOwnerRef(
+  ownerRef: CreateRuntimeInput["ownerRef"],
+): RuntimeOwnerRef | undefined {
+  if (!ownerRef) {
+    return undefined;
+  }
+
+  const kind = typeof ownerRef.kind === "string" ? ownerRef.kind.trim() : "";
+  const id = typeof ownerRef.id === "string" ? ownerRef.id.trim() : "";
+
+  // ownerRef 首切片只承担稳定关系标识，不在这里引入跨聚合查验或更复杂语义。
+  if (!kind) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "运行时 ownerRef.kind 不能为空", {
+        ownerRef,
+      }),
+    );
+  }
+
+  if (!id) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "运行时 ownerRef.id 不能为空", {
+        ownerRef,
+      }),
+    );
+  }
+
+  return {
+    ...ownerRef,
+    kind,
+    id,
+  };
+}
 
 export function createRuntimeUseCase(
   options: CreateLightTaskOptions,
@@ -51,12 +85,14 @@ export function createRuntimeUseCase(
     );
   }
 
+  const ownerRef = normalizeRuntimeOwnerRef(input.ownerRef);
   const runtime: PersistedLightRuntime = createRuntimeRecord({
     id: runtimeId,
     kind,
     title,
     createdAt: clockNow(),
     parentRef: input.parentRef,
+    ownerRef,
     context: input.context,
     result: input.result,
     metadata: input.metadata,

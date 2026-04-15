@@ -14,6 +14,10 @@ test("LightTask Runtime API 支持创建、读取、列出与默认推进运行�
       kind: "plan",
       id: "plan_alpha",
     },
+    ownerRef: {
+      kind: " task ",
+      id: " task_alpha ",
+    },
     context: {
       goal: "launch",
     },
@@ -35,6 +39,10 @@ test("LightTask Runtime API 支持创建、读取、列出与默认推进运行�
     kind: "plan",
     id: "plan_alpha",
   });
+  assert.deepEqual(runtime.ownerRef, {
+    kind: "task",
+    id: "task_alpha",
+  });
   assert.deepEqual(runtime.context, {
     goal: "launch",
   });
@@ -42,16 +50,32 @@ test("LightTask Runtime API 支持创建、读取、列出与默认推进运行�
   const fetched = lighttask.getRuntime("runtime_alpha");
   assert.ok(fetched);
   assert.equal(fetched.kind, "plan_launch");
+  assert.deepEqual(fetched.ownerRef, {
+    kind: "task",
+    id: "task_alpha",
+  });
 
   const listed = lighttask.listRuntimes();
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, "runtime_alpha");
+  assert.deepEqual(listed[0].ownerRef, {
+    kind: "task",
+    id: "task_alpha",
+  });
 
   const running = lighttask.advanceRuntime("runtime_alpha", {
     expectedRevision: 1,
-  });
+    ownerRef: {
+      kind: "task",
+      id: "task_beta",
+    },
+  } as never);
   assert.equal(running.status, "running");
   assert.equal(running.revision, 2);
+  assert.deepEqual(running.ownerRef, {
+    kind: "task",
+    id: "task_alpha",
+  });
 
   const completed = lighttask.advanceRuntime("runtime_alpha", {
     expectedRevision: 2,
@@ -64,6 +88,10 @@ test("LightTask Runtime API 支持创建、读取、列出与默认推进运行�
   assert.deepEqual(completed.result, {
     outcome: "ok",
   });
+  assert.deepEqual(completed.ownerRef, {
+    kind: "task",
+    id: "task_alpha",
+  });
 });
 
 test("LightTask Runtime API 返回快照并与内部状态隔离", () => {
@@ -75,6 +103,10 @@ test("LightTask Runtime API 返回快照并与内部状态隔离", () => {
     parentRef: {
       kind: "task",
       id: "task_1",
+    },
+    ownerRef: {
+      kind: "plan",
+      id: "plan_snapshot",
     },
     context: {
       input: { name: "tester" },
@@ -90,6 +122,8 @@ test("LightTask Runtime API 返回快照并与内部状态隔离", () => {
   runtime.title = "外部篡改";
   assert.ok(runtime.parentRef);
   runtime.parentRef.kind = "mutated";
+  assert.ok(runtime.ownerRef);
+  runtime.ownerRef.kind = "changed";
   assert.ok(runtime.context);
   runtime.context.input = { name: "mutated" };
 
@@ -104,6 +138,10 @@ test("LightTask Runtime API 返回快照并与内部状态隔离", () => {
   assert.deepEqual(stored.parentRef, {
     kind: "task",
     id: "task_1",
+  });
+  assert.deepEqual(stored.ownerRef, {
+    kind: "plan",
+    id: "plan_snapshot",
   });
   assert.deepEqual(stored.context, {
     input: { name: "tester" },
@@ -132,6 +170,48 @@ test("LightTask Runtime API expectedRevision 不匹配时返回 REVISION_CONFLIC
       assert.equal(error.coreError.message, "expectedRevision 与当前 revision 不一致");
       assert.equal(error.details?.currentRevision, 1);
       assert.equal(error.details?.expectedRevision, 2);
+      return true;
+    },
+  );
+});
+
+test("LightTask Runtime API 创建时会校验 ownerRef.kind 与 ownerRef.id", () => {
+  const lighttask = createLightTask(createTestLightTaskOptions());
+
+  assert.throws(
+    () =>
+      lighttask.createRuntime({
+        id: "runtime_invalid_owner_kind",
+        kind: "plan_launch",
+        title: "ownerRef 校验",
+        ownerRef: {
+          kind: "   ",
+          id: "task_1",
+        },
+      }),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      assert.equal(error.coreError.message, "运行时 ownerRef.kind 不能为空");
+      return true;
+    },
+  );
+
+  assert.throws(
+    () =>
+      lighttask.createRuntime({
+        id: "runtime_invalid_owner_id",
+        kind: "plan_launch",
+        title: "ownerRef 校验",
+        ownerRef: {
+          kind: "task",
+          id: "   ",
+        },
+      }),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      assert.equal(error.coreError.message, "运行时 ownerRef.id 不能为空");
       return true;
     },
   );

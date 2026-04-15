@@ -34,10 +34,7 @@ function assertRuntimeId(runtimeId: string): string {
   return normalizedRuntimeId;
 }
 
-function hasOwnField(
-  input: AdvanceRuntimeInput,
-  fieldName: keyof AdvanceRuntimeInput,
-): boolean {
+function hasOwnField(input: AdvanceRuntimeInput, fieldName: keyof AdvanceRuntimeInput): boolean {
   return Object.prototype.hasOwnProperty.call(input, fieldName);
 }
 
@@ -100,7 +97,9 @@ export function advanceRuntimeUseCase(
     ...runtime,
     status: transition.status,
     // 首切片只允许在推进时携带结果快照，不在这里引入额外策略字段。
-    result: hasOwnField(input, "result") ? cloneOptional(input.result ?? undefined) : runtime.result,
+    result: hasOwnField(input, "result")
+      ? cloneOptional(input.result ?? undefined)
+      : runtime.result,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,

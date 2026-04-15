@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DomainEvent, GraphSnapshot, PlanSessionRecord, RuntimeRecord } from "../data-structures";
+import type {
+  DomainEvent,
+  GraphSnapshot,
+  OutputRecord,
+  PlanSessionRecord,
+  RuntimeRecord,
+} from "../data-structures";
 import {
-  createInMemoryNotifyCollector,
   createInMemoryGraphRepository,
+  createInMemoryNotifyCollector,
+  createInMemoryOutputRepository,
   createInMemoryPlanRepository,
   createInMemoryRuntimeRepository,
   createInMemoryTaskRepository,
@@ -92,11 +99,39 @@ function createRuntime(runtimeId: string, revision = 1): RuntimeRecord {
       kind: "plan",
       id: "plan_1",
     },
+    ownerRef: {
+      kind: "task",
+      id: "task_1",
+    },
     context: { source: { name: "tester" } },
     metadata: { owner: { name: "tester" } },
     extensions: {
       properties: { priority: "p1" },
       namespaces: { runtime: { lane: "core" } },
+    },
+  };
+}
+
+function createOutput(outputId: string, revision = 1): OutputRecord {
+  return {
+    id: outputId,
+    kind: "summary",
+    status: revision > 1 ? "sealed" : "open",
+    createdAt: "2026-04-14T00:00:00.000Z",
+    updatedAt: "2026-04-14T00:00:00.000Z",
+    revision,
+    runtimeRef: {
+      id: "runtime_1",
+    },
+    ownerRef: {
+      kind: "task",
+      id: "task_1",
+    },
+    payload: { content: { text: "draft" } },
+    metadata: { owner: { name: "tester" } },
+    extensions: {
+      properties: { priority: "p1" },
+      namespaces: { output: { lane: "core" } },
     },
   };
 }
@@ -554,6 +589,8 @@ test("端口层 in-memory：runtime create/get/list 返回快照与内部状态�
   created.runtime.title = "外部篡改";
   assert.ok(created.runtime.parentRef);
   created.runtime.parentRef.kind = "mutated";
+  assert.ok(created.runtime.ownerRef);
+  created.runtime.ownerRef.kind = "changed";
 
   const fetched = repository.get("runtime_repo_1");
   assert.ok(fetched);
@@ -561,6 +598,10 @@ test("端口层 in-memory：runtime create/get/list 返回快照与内部状态�
   assert.deepEqual(fetched.parentRef, {
     kind: "plan",
     id: "plan_1",
+  });
+  assert.deepEqual(fetched.ownerRef, {
+    kind: "task",
+    id: "task_1",
   });
 
   const listed = repository.list();
@@ -636,6 +677,75 @@ test("端口层 in-memory：runtime saveIfRevisionMatches 在 revision 匹配时
   assert.equal(fetched.status, "running");
   assert.equal(fetched.revision, 2);
   assert.deepEqual(fetched.result, { outcome: "ok" });
+});
+
+test("端口层 in-memory：output create/get/list 返回快照并与内部状态隔离", () => {
+  const repository = createInMemoryOutputRepository<OutputRecord>();
+  const created = repository.create(createOutput("output_repo_1"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  created.output.kind = "外部篡改";
+  created.output.payload = { content: { text: "mutated" } };
+  assert.ok(created.output.metadata);
+  created.output.metadata.owner = { name: "mutated" };
+
+  const fetched = repository.get("output_repo_1");
+  assert.ok(fetched);
+  assert.equal(fetched.kind, "summary");
+  assert.deepEqual(fetched.payload, { content: { text: "draft" } });
+  assert.deepEqual(fetched.metadata, { owner: { name: "tester" } });
+
+  const listed = repository.list();
+  listed[0].status = "sealed";
+  listed[0].runtimeRef = { id: "runtime_mutated" };
+
+  const refetched = repository.get("output_repo_1");
+  assert.ok(refetched);
+  assert.equal(refetched.status, "open");
+  assert.deepEqual(refetched.runtimeRef, { id: "runtime_1" });
+});
+
+test("端口层 in-memory：output create 后外部篡改原入参不会污染仓储", () => {
+  const repository = createInMemoryOutputRepository<OutputRecord>();
+  const original = createOutput("output_input_create");
+
+  const created = repository.create(original);
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  original.kind = "外部修改原入参";
+  original.payload = { content: { text: "changed" } };
+
+  const fetched = repository.get("output_input_create");
+  assert.ok(fetched);
+  assert.equal(fetched.kind, "summary");
+  assert.deepEqual(fetched.payload, { content: { text: "draft" } });
+});
+
+test("端口层 in-memory：output saveIfRevisionMatches 在 revision 冲突时返回 REVISION_CONFLICT", () => {
+  const repository = createInMemoryOutputRepository<OutputRecord>();
+  const created = repository.create(createOutput("output_revision"));
+  assert.equal(created.ok, true);
+  if (!created.ok) {
+    assert.fail("create 应成功");
+  }
+
+  const next = createOutput("output_revision", 2);
+
+  const saved = repository.saveIfRevisionMatches(next, 2);
+  assert.equal(saved.ok, false);
+  if (saved.ok) {
+    assert.fail("revision 冲突必须失败");
+  }
+  assert.equal(saved.error.code, "REVISION_CONFLICT");
+  assert.equal(saved.error.details?.outputId, "output_revision");
+  assert.equal(saved.error.details?.expectedRevision, 2);
+  assert.equal(saved.error.details?.actualRevision, 1);
 });
 
 test("端口层 in-memory：graph get/create 返回快照与内部状态隔离", () => {
