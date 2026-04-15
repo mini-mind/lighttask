@@ -48,3 +48,9 @@ Thumbs.db
 *.upx
 *.ctpx
 *.tgz
+
+# Local harness artifacts
+.harness-active
+harness-init.sh
+harness-progress.txt
+harness-tasks.json
