@@ -1,67 +1,90 @@
 # LightTask
 
-LightTask 是通用人机协作编排内核，不是 uTools 应用。目标是为 `linpo`、`TopoFlow` 等应用层提供可复用的核心能力。
+LightTask 是一个面向上层业务应用的 TypeScript 编排内核，用统一的数据模型承接任务、计划、流程图、运行态、输出和领域事件，帮助团队把“流程怎么建、任务怎么跑、结果怎么落”沉淀成可复用的公共能力。
 
-## 定位
+## 它能带来什么
 
-- `multica`：作为核心功能参考，挖其芯为核。
-- `lazyai`：只取极简 harness 思路，补足 codex 式编排、验证与协作能力。
-- `linpo`、`TopoFlow`：属于应用层，当前仓库只提供通用内核。
+- 用同一套核心对象承接任务流、计划流和执行流，减少应用层重复建模。
+- 通过已发布图驱动任务物化，让流程设计和执行启动之间有清晰边界。
+- 提供稳定的调度事实计算，便于上层应用实现自己的派发、优先级和审批策略。
+- 通过 `ports` 子入口对接现有存储、时钟、ID 生成器和事件系统，方便嵌入已有产品架构。
 
-## 范围
+## 适合构建的场景
 
-- 纯 TypeScript 内核库。
-- 只保留公共 API 与 CLI 冒烟入口（根入口 + `data-structures`/`rules`/`ports` 子入口）。
-- 不承载 uTools 壳、页面、预加载脚本和应用层策略。
+- AI 协作任务流与人工审核链路
+- 内容生产、交付、审批等多阶段流程
+- 需要任务图建模和执行跟踪的工作流产品
+- 希望把核心编排逻辑从应用代码中沉淀为公共库的团队
 
-## 当前能力
+## 核心能力
 
-- 任务：`createTask / listTasks / listTasksByPlan / getTask / advanceTask`，包含 revision guard 与任务推进幂等重放。
-- 计划：`createPlan / listPlans / getPlan / updatePlan / advancePlan`。
-- 图：`getGraph / saveGraph / editGraph / getPublishedGraph / publishGraph`，明确区分 draft 与 published 边界。
-- 运行态：`createRuntime / listRuntimes / getRuntime / advanceRuntime`，并对 `parentRef / ownerRef / relatedRefs` 做统一归一化校验。
-- 输出：`createOutput / listOutputs / getOutput / advanceOutput`。
-- 编排闭环：`materializePlanTasks / getPlanSchedulingFacts / launchPlan`，覆盖已发布图物化、稳定调度事实计算与计划启动。
-- 通知与事件：支持 transport-free 的 `notify.publish(event)`，当前事件边界覆盖 task / plan / graph / runtime / output 单聚合事件，以及 `plan.tasks_materialized`、`plan.launched` 两个编排事件。
-- 核心规则：任务/计划状态机、DAG 校验、revision 规则、统一错误面 `LightTaskError`。
-- 最小端口：任务、计划、图、运行态、输出仓储，通知端口，时钟，ID 生成器；各 API 仅在调用路径上校验实际依赖的端口函数。
+- 任务 API：`createTask`、`listTasks`、`listTasksByPlan`、`getTask`、`advanceTask`
+- 计划 API：`createPlan`、`listPlans`、`getPlan`、`updatePlan`、`advancePlan`
+- 图 API：`getGraph`、`saveGraph`、`editGraph`、`getPublishedGraph`、`publishGraph`
+- 编排 API：`materializePlanTasks`、`getPlanSchedulingFacts`、`launchPlan`
+- 运行态 API：`createRuntime`、`listRuntimes`、`getRuntime`、`advanceRuntime`
+- 输出 API：`createOutput`、`listOutputs`、`getOutput`、`advanceOutput`
+- 事件能力：提交成功后通过 `notify.publish(event)` 推送领域事件
 
-## 目录
+## 快速感受接入方式
 
-```text
-lighttask/
-├─ README.md
-├─ AGENTS.md
-├─ .gitignore
-├─ package.json            # 包定义与脚本入口
-├─ tsconfig.json           # TypeScript 编译配置
-├─ src/                    # 源码根目录
-│  ├─ data-structures/     # 数据结构层：实体、状态、事件、错误、revision
-│  ├─ rules/               # 规则层：FSM、DAG、幂等、revision 规则
-│  ├─ ports/               # 端口层：仓储、时钟、ID 生成等接口契约
-│  ├─ core/                # 内核编排入口（组合规则层，不承载应用层策略）
-│  ├─ cli/                 # 命令行入口与冒烟验证
-│  └─ tests/               # API 与规则回归测试
+```ts
+import { createLightTask } from "lighttask";
+
+const lighttask = createLightTask({
+  taskRepository,
+  planRepository,
+  graphRepository,
+  runtimeRepository,
+  outputRepository,
+  notify,
+  clock: {
+    now: () => new Date().toISOString(),
+  },
+  idGenerator: {
+    nextTaskId: () => `task_${crypto.randomUUID()}`,
+  },
+});
+
+const plan = lighttask.createPlan({
+  id: "content_pipeline",
+  title: "内容生产流程",
+});
+
+lighttask.advancePlan(plan.id, { expectedRevision: plan.revision });
+lighttask.advancePlan(plan.id, { expectedRevision: 2 });
+
+const draftGraph = lighttask.saveGraph(plan.id, {
+  nodes: [{ id: "node_write", taskId: "graph_task_write", label: "撰写初稿" }],
+  edges: [],
+});
+
+const publishedGraph = lighttask.publishGraph(plan.id, {
+  expectedRevision: draftGraph.revision,
+});
+
+const launched = lighttask.launchPlan(plan.id, {
+  expectedRevision: 3,
+  expectedPublishedGraphRevision: publishedGraph.revision,
+});
+
+console.log(launched.tasks.map((task) => task.title));
 ```
 
-## 契约
+完整接入示例见 [docs/application-developer-guide.md](/data/projects/lighttask/docs/application-developer-guide.md)。
 
-- `createLightTask`：入参可提供 `taskRepository`、`planRepository`、`graphRepository`、`runtimeRepository`、`outputRepository`、`notify`、`clock`、`idGenerator`；运行时只会在对应 API 被调用时校验该用例实际依赖的端口函数。
-- 任务 API：`createTask / listTasks / listTasksByPlan / getTask / advanceTask` 仅依赖任务路径当前用到的端口函数；`advanceTask` 要求显式 `expectedRevision`，并以 `idempotencyKey` 提供 replay/冲突判定。
-- 计划 API：`createPlan / listPlans / getPlan / updatePlan / advancePlan` 基于 `planRepository` 完整契约；`createPlan` 与各读取/更新入口都会先做 `trim()` 与非空校验。
-- 图 API：`getGraph / saveGraph / editGraph / getPublishedGraph / publishGraph` 以 `planId` 为边界；`saveGraph` 与 `publishGraph` 按创建/更新分支最小化依赖 `graphRepository.create/saveIfRevisionMatches`，并分别维护 draft / published 快照。`saveGraph.idempotencyKey` 当前只写入图元数据，不提供 replay 语义。
-- 编排 API：`materializePlanTasks` 以 published graph 为唯一任务物化来源；`getPlanSchedulingFacts` 只输出稳定顺序、ready/runnable/blocked/terminal 等事实，不替上层做派发策略；`launchPlan` 关闭 `ready -> published graph -> tasks -> confirmed plan` 的最小编排回路。
-- runtime API：`createRuntime / listRuntimes / getRuntime / advanceRuntime` 只依赖运行态路径当前用到的端口函数；`parentRef / ownerRef / relatedRefs` 在创建时做统一对象引用归一化与空白校验，推进时保持关系字段只读。
-- output API：`createOutput / listOutputs / getOutput / advanceOutput` 与其他聚合一致，采用结构化快照、显式 `expectedRevision` 与统一错误面。
-- notify：未注入 `notify` 时保持兼容；注入后在成功提交后发布领域事件。当前事件边界覆盖 task / plan / graph / runtime / output 单聚合事件，以及 `plan.tasks_materialized`、`plan.launched` 编排事件，不绑定 SSE / WebSocket / callback 等传输。
-- 端口契约：仓储读写返回值应与存储态隔离，不得共享可变引用；仓储写入不得原地修改调用方传入对象。
-- 端口契约：仓储常规失败应返回 `CoreError` 形状；若端口直接抛原生异常，公共 API 会归一化为 `LightTaskError(INVARIANT_VIOLATION)`，该路径只作为违约防御而非常规语义。
-- 错误：统一抛 `LightTaskError`，可按 `code`、`message`、`details` 判别。
+## 文档导航
 
-## 使用
+- [上层应用开发者使用教程](/data/projects/lighttask/docs/application-developer-guide.md)
+- [产品需求文档](/data/projects/lighttask/docs/lighttask-kernel-replacement-prd.md)
+- [架构说明](/data/projects/lighttask/docs/architecture.md)
+
+## 本地开发
 
 ```bash
 npm install
 npm run check
 npm run dev:cli -- demo
 ```
+
+`README` 面向接入者提供入口信息，详细的端口实现方式、端到端示例和接入建议请查看教程文档。

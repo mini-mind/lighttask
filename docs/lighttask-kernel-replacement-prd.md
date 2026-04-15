@@ -1,277 +1,236 @@
-# Product Requirements Document: LightTask 面向替换上层核心逻辑的通用编排内核
+# LightTask 产品需求文档
 
-**Version**: 1.0
-**Date**: 2026-04-15
-**Author**: Sarah (Product Owner)
-**Quality Score**: 94/100
+**版本**：2.0  
+**日期**：2026-04-15  
+**面向读者**：产品经理、平台负责人、业务应用负责人
 
----
+## 1. 文档目的
 
-## Executive Summary
+这份 PRD 用产品语言说明 LightTask 要解决的问题、服务的对象、当前阶段的产品范围，以及对上层业务应用的价值。它的目标是帮助产品人员判断：
 
-LightTask 当前已经从最小编排内核演进到了具备 task、plan、graph、runtime、notify 等核心能力的 workflow kernel，并已经形成 graph publish boundary、任务物化、计划启动、runtime 生命周期与单聚合领域事件的第一版闭环。当前问题不再是“核心对象是否存在”，而是这些对象能否进一步形成完整、通用、可插拔、可演进的协议层，以承接更复杂的图编辑、任务治理、运行关系、复合编排事件与产物抽象。
+- 为什么团队需要一套统一的编排内核
+- 这套能力能支撑哪些产品场景
+- 当前版本优先交付哪些能力
+- 上层应用应如何围绕内核组织自己的产品能力
 
-本 PRD 的目标，不是把 Linpo 或 TopoFlow 的数据结构搬进 LightTask，而是把 LightTask 提升为**面向替换上层核心逻辑**的通用编排内核。它必须能够支撑上层应用开发者在不复制核心逻辑的前提下，构建类似 Linpo 和 TopoFlow 的流程/任务系统，同时继续对平台、传输、Provider、UI 结构和具体调度策略保持解耦。
+## 2. 产品概述
 
-该能力建设的价值在于：统一核心协议，减少上层重复实现，降低集成复杂度，稳定长期演进边界，并使任务、计划、图、运行态、事件的生命周期全部落在一个一致的内核模型中。当前阶段的重点不是继续扩张应用语义，而是在已经形成的主干能力之上补齐治理层协议，并明确哪些决策应继续留在上层应用。 
+LightTask 是一套面向上层业务应用的通用编排内核。它通过统一的任务、计划、流程图、运行态、输出和事件模型，承接应用中的核心流程语义，让不同产品线可以在同一套编排能力之上构建各自的页面、交互、调度策略和业务规则。
 
----
+对产品团队来说，LightTask 的意义不在于“多一个库”，而在于“多一套稳定的产品底座”：
 
-## Problem Statement
+- 产品功能可以围绕统一对象演进，减少每个应用各自维护一套流程核心。
+- 新业务在接入时能够直接复用任务推进、计划发射、流程图发布和执行跟踪能力。
+- 平台团队可以把注意力放在产品策略和业务差异化，而不是重复建设基础编排逻辑。
 
-**Current Situation**:  
-LightTask 已具备较完整的编排主干：task / plan / graph / runtime / output / notify 的基础对象与核心 use case 已落地，且已经具备 graph publish boundary、editGraph、materializePlanTasks、getPlanSchedulingFacts、launchPlan、runtime 生命周期、统一关系归一化以及单聚合领域事件加上最小编排事件闭环。与当前代码现实和 `docs/architecture.md` 的分层边界对照后，真正尚未收敛的高阶缺口主要是：图增量编辑协议仍偏粗、任务物化后的治理规则仍偏薄、runtime 关系模型仍是最小切片、编排事件协议成熟度仍有限、output 抽象仍停留在基础聚合层。
+## 3. 目标用户
 
-**Proposed Solution**:  
-将 LightTask 明确升级为“面向替换上层核心逻辑的通用 workflow / orchestration kernel”，不再把已经落地的 trunk 能力当作待实现项，而是在现有主干之上继续补齐协议成熟度：图增量编辑协议细化、任务物化治理规则完善、runtime 关系增强、编排事件协议规范化、output 抽象深化。同时保持 core 只承载通用逻辑，应用层 transport、UI、platform/provider 适配以及调度策略一律通过上层应用与 ports/adapter 体系隔离。
+### 主要用户：上层业务应用团队
 
-**Business Impact**:  
-- 减少 Linpo / TopoFlow 以及未来上层应用中的核心逻辑重复实现
-- 稳定通用协议，降低后续扩展和集成成本
-- 使新应用更容易基于 LightTask 构建，而不是复制其核心状态机、图规则、任务物化和运行态逻辑
-- 提升维护效率，使内核维护者能够在单一代码库中迭代核心能力，同时避免被上层应用策略绑架
+- 角色：工作流产品、AI 协作产品、内容生产平台、运营系统等业务应用开发团队
+- 需求：快速获得稳定的编排底座，把精力放在业务体验和策略设计上
+- 价值：减少重复开发，提升交付速度，统一核心模型
 
----
+### 次要用户：平台与中台团队
 
-## Success Metrics
+- 角色：负责统一能力建设的技术平台团队
+- 需求：用一套公共内核支撑多个业务应用
+- 价值：降低维护成本，提高能力复用率，沉淀统一产品语言
 
-**Primary KPIs:**
-- **核心闭环完备度**：LightTask 内核能够完整承接“计划/图/任务/运行态/基础事件”的通用主链，并为上层应用提供调度治理所需的稳定基础能力与 runnable candidate 计算能力；验收方式为对应 use case 与测试矩阵全部落地并通过
-- **重复逻辑收敛度**：Linpo / TopoFlow 中原本属于核心逻辑的共性能力，可以迁移或映射到 LightTask，而不需要继续在上层重复维护；验收方式为能力映射清单中高优先级项全部被内核覆盖
-- **协议稳定度**：task / plan / graph / runtime / event 的核心接口可稳定导出并通过 contract tests；验收方式为公共导出契约、API 契约、repo 契约、状态机契约全部通过
-- **集成难度下降**：上层应用接入 LightTask 时，不再需要自行重建任务物化、计划推进、基础运行态和单聚合事件流；验收方式为集成示例/映射分析中胶水层显著减少
+### 决策相关方：产品负责人
 
-**Validation**:  
-通过以下方式验证：
-- `npm run check` 全绿
-- 对外导出契约测试与 API 测试全绿
-- 完成一份“Linpo / TopoFlow 能力映射到 LightTask 的覆盖矩阵”并达到可接受覆盖率
-- 对剩余延期项保持明确边界，不出现回退到应用耦合模型的设计漂移
+- 角色：负责规划工作流、协作流、审批流等产品能力的负责人
+- 需求：判断哪些能力应成为平台通用能力，哪些能力应保留在应用层
+- 价值：获得清晰的产品边界和迭代节奏
 
----
+## 4. 要解决的核心问题
 
-## User Personas
+当前许多业务应用在流程管理上都会遇到相似问题：
 
-### Primary: 上层应用开发者
-- **Role**: 基于 LightTask 构建流程/任务系统的应用开发者
-- **Goals**: 复用稳定的通用核心逻辑，而不是在应用中重复实现计划、图、任务、运行态、输出与调度能力
-- **Pain Points**: 当前仍需自己补更细的图编辑协议、任务物化治理、runtime 关系约束、编排事件消费协议与更成熟的 output 治理语义
-- **Technical Level**: Advanced
+1. 任务、计划、流程图、执行记录和产物模型分散在不同模块里，导致概念不统一。
+2. 同类能力在多个应用中反复实现，维护成本高，修复节奏不一致。
+3. 流程设计版本和执行版本缺少明确边界，容易出现“边改边跑”的状态混乱。
+4. 应用层经常需要自己计算任务依赖、执行顺序和阻塞原因，增加接入复杂度。
+5. 执行过程与交付结果缺少统一承载对象，不利于沉淀审计、追踪和自动化能力。
 
-### Secondary: 内核维护者
-- **Role**: 维护和演进 LightTask 本身的开发者
-- **Goals**: 保持核心模型清晰、可测、可演进，并防止被单一应用的数据结构绑架
-- **Pain Points**: 如果没有清晰 PRD 和边界，容易在新增能力时把应用语义、transport 语义、平台语义错误地下沉到 core
-- **Technical Level**: Advanced
+LightTask 的产品任务，就是把这些共性问题收敛到一套统一、可扩展、可复用的公共内核中。
 
----
+## 5. 产品目标
 
-## User Stories & Acceptance Criteria
+### 目标一：提供统一编排模型
 
-### Story 1: 统一核心对象与主链闭环
+让上层应用围绕同一套核心对象工作：
 
-**As a** 上层应用开发者  
-**I want to** 使用 LightTask 直接承接 task / plan / graph / runtime / output 的核心逻辑  
-**So that** 我不必在应用层重复实现流程图、任务网、运行态、输出与事件的内核能力
+- `Task` 承接任务推进
+- `Plan` 承接流程生命周期
+- `Graph` 承接流程结构设计与版本发布
+- `Runtime` 承接执行记录
+- `Output` 承接产物与交付结果
 
-**Acceptance Criteria:**
-- [x] LightTask 提供完整的 task / plan / graph / runtime / output 核心对象与最小 CRUD/query 能力
-- [x] LightTask 提供计划到已发布图到任务网的完整主链闭环
-- [x] 上层应用不需要自行实现这些核心对象的基础生命周期逻辑
+### 目标二：缩短上层应用的建设周期
 
-### Story 2: 保持通用性与可插拔边界
+让应用团队可以直接复用以下能力：
 
-**As a** 内核维护者  
-**I want to** 在增强能力的同时保持 LightTask 的通用性和可插拔性  
-**So that** 它不会被 Linpo / TopoFlow 的专属结构绑架
+- 计划创建与推进
+- 流程图草稿保存与版本发布
+- 已发布图驱动的任务物化
+- 调度事实计算
+- 执行记录与结构化产物沉淀
+- 领域事件发布
 
-**Acceptance Criteria:**
-- [ ] core 中不出现 Linpo/TopoFlow 专属字段、session 命名、workspace 结构或 transport 协议
-- [ ] Provider、平台集成、通知传输、策略层通过 ports/adapter 方式隔离
-- [ ] 所有新增能力都能通过通用契约和测试表达，而不是依赖应用层假设
+### 目标三：形成清晰的产品边界
 
-### Story 3: 降低集成和维护成本
+让公共内核聚焦“统一编排语义”，同时让上层应用继续负责：
 
-**As a** 上层应用开发者  
-**I want to** 以较少胶水代码把 LightTask 集成到应用中  
-**So that** 我可以把更多工作集中在产品层而不是重复维护核心编排逻辑
+- 页面与交互体验
+- 具体调度策略
+- 通知通道与消息传输
+- 业务专属字段和业务专属流程
 
-**Acceptance Criteria:**
-- [x] 任务物化、计划启动、运行态推进、输出推进、单聚合事件发布以及调度候选计算都由内核提供
-- [x] 上层只需补应用特有的 transport / UI / provider 适配，以及具体调度策略
-- [x] 契约测试能够清晰说明哪些能力属于内核、哪些能力明确留在应用层
-
-### Story 4: 支撑多视图需求但不绑定视图实现
-
-**As a** 上层应用开发者  
-**I want to** 在看板、甘特图、流程图等视图中复用同一核心对象  
-**So that** 我不需要为不同视图维护多套核心状态模型
-
-**Acceptance Criteria:**
-- [ ] task / plan / graph 支持结构化扩展槽位，而不是把所有字段都塞进无约束 metadata
-- [ ] 扩展槽位仅表达通用承载能力，不带 UI 框架或页面实现语义
-- [ ] 扩展字段经过快照隔离与公共类型对齐测试验证
-
----
-
-## Functional Requirements
-
-### Core Features
-
-**Feature 1: 完整核心对象协议**
-- Description: LightTask 必须提供 task / plan / graph / runtime / output 五类核心对象的稳定数据结构、状态机、repo 合约与最小 CRUD/query 能力
-- User flow: 创建对象 -> 查询对象 -> 条件更新 -> 生命周期推进 -> 读取最新快照
-- Edge cases: revision 冲突、对象不存在、坏依赖注入、快照污染、空白 ID / 非法输入
-- Error handling: 统一通过 `LightTaskError` 暴露结构化错误
-
-**Feature 2: Graph draft/publish 与计划主链**
-- Description: LightTask 必须支持 draft graph 与 published graph 边界，并提供 `editGraph` 这样的增量编辑入口，且继续以 published graph 为唯一任务物化来源
-- User flow: 保存草稿图 / 编辑草稿图 -> 发布图 -> 从已发布图物化任务 -> 启动计划
-- Edge cases: published graph 缺失、published graph revision 不匹配、草稿更新但未发布、非法图结构
-- Error handling: `NOT_FOUND` / `REVISION_CONFLICT` / `VALIDATION_ERROR`
-
-**Feature 3: Materialize、Scheduling Facts 与 Launch 编排**
-- Description: 内核需要支持计划 -> 已发布图 -> 任务网 的通用编排闭环，并能输出稳定调度事实且以最小语义完成计划启动
-- User flow: 计划 ready -> 读取 published graph -> 物化任务 -> 计算 scheduling facts -> confirm plan
-- Edge cases: 已存在任务如何同步、未发布图不可 launch、计划状态不合法、graph 与 task 结构不一致
-- Error handling: 严格 revision guard，禁止半吊子状态漂移
-
-**Feature 4: 调度治理基础能力（MVP 内）**
-- Description: 为替换 Linpo/TopoFlow 核心逻辑，LightTask 需要内置通用调度基础能力，但不内置具体调度策略。LightTask 负责提供可运行任务网络、状态机、图规则、运行态与事件基础，并能计算哪些任务当前可运行、哪些任务被阻塞以及稳定顺序；具体出队顺序、优先级、批量策略、人工审批介入策略等由上层应用定义，以保持内核灵活和不过度臃肿。
-- User flow: 读取任务网 -> LightTask 计算 runnable / blocked / terminal 集合及其稳定顺序 -> 上层应用按自身策略选择执行顺序 -> 驱动任务与 runtime 状态更新
-- Edge cases: 非法迁移、并发冲突、任务无可执行动作、重入调度、上层策略变更
-- Error handling: 延续现有状态机与 revision 规则；内核只对核心一致性和候选任务计算负责，不下沉应用层 provider 或调度策略逻辑
-
-**Feature 5: 通用 runtime 聚合**
-- Description: runtime 必须作为独立聚合存在，用于承接运行态而不污染 task/plan 本体
-- User flow: createRuntime -> get/list -> advanceRuntime
-- Edge cases: parentRef / ownerRef / relatedRefs 非法空白、relatedRefs 非数组、关系字段在 create 后被尝试改写、状态冲突、revision mismatch、运行态结果覆盖
-- Error handling: 与其他聚合一致，基于条件写和统一错误面
-
-**Feature 6: output 基础聚合**
-- Description: 内核必须提供独立 output 聚合，用于承接产物/输出的最小生命周期与条件更新，而不把产物语义挤进 task/runtime 本体
-- User flow: createOutput -> get/list -> advanceOutput
-- Edge cases: 空白 ID、非法状态推进、revision mismatch、快照污染
-- Error handling: 与其他聚合一致，基于条件写和统一错误面
-
-**Feature 7: 基础领域事件通知**
-- Description: 内核必须支持成功提交后的领域事件发布，不绑定 transport；当前事件边界覆盖单聚合事件与最小编排事件
-- User flow: 聚合写入成功 -> publish(domain event)
-- Edge cases: replay/no-op 不重复发布、发布事件快照污染、未注入 notify port 时行为保持兼容
-- Error handling: 事件发布 contract 与核心写入时序保持一致
-
-### Out of Scope
-- 具体通知传输层（SSE / WebSocket / callback）
-- telemetry / metrics / tracing / 审计系统
-- policy 抽象与策略引擎
-- Linpo planner session / TopoFlow workspace 等应用专属模型
-- UI 页面、平台壳、provider 接入细节
-
----
-
-## Technical Constraints
-
-### Performance
-- 核心对象操作和状态推进应保持同步、确定性、可测试
-- 最小目标是保证内核 use case 在本地测试环境下快速可回归，不引入明显热路径膨胀
-- 任务物化、图发布、runtime 推进需要保证可预测的复杂度和稳定顺序
-
-### Security
-- 公共错误面统一，不泄漏未规约的原生异常
-- 不允许通过扩展字段或 transport 绑定破坏内核分层边界
-- revision / optimistic concurrency 必须作为一致性保护基础能力
-- 通知机制不能隐式绑定外部通道或回调行为
-
-### Integration
-- 所有应用特有能力必须通过 ports/adapter 进入，不直接进入 core
-- 内核导出必须保持稳定：根入口 + `data-structures` / `rules` / `ports` 子入口
-- 上层应用必须可以只依赖 LightTask 的通用契约，而不是内部实现细节
-
-### Technology Stack
-- TypeScript / CommonJS / Node >= 20
-- 测试以 Node test + TypeScript build 产物为准
-- 质量门包含 `typecheck`、`lint`、`format:check`、`arch:check`、`test`
-
----
-
-## MVP Scope & Phasing
-
-### Phase 1: MVP（当前已形成的产品基线）
-- task / plan / graph / runtime / output 五类核心对象协议
-- 最小 CRUD / query
-- graph draft / publish boundary
-- `editGraph`
-- `materializePlanTasks`
-- `getPlanSchedulingFacts`
-- `launchPlan`
-- runtime 最小聚合与关系归一化
-- 单聚合基础领域事件 + `plan.tasks_materialized` / `plan.launched` 最小编排事件
-- 结构化扩展槽位
-
-**MVP Definition**:  
-LightTask 已能够在不绑定上层应用数据结构的前提下，承接“计划 / 图 / 任务 / 运行态 / 输出 / 基础事件”的通用主链，并为上层应用补充调度治理、协议细化和执行治理所需的进一步能力留出清晰边界。
-
-### Phase 2: Next Critical Gaps（下一阶段关键缺口）
-- `editGraph` 之上的 patch / incremental edit 协议细化
-- materialization reconciliation policy 的更细规则抽象
-- runtime 关系模型增强（多层 runtime、关系约束、关系查询协议）
-- 编排事件协议成熟化（命名、时序、消费约束、批量/复合语义）
-- output 抽象从基础聚合走向更稳定的通用协议
-- 面向上层应用的调度治理支撑能力继续增强，但具体调度策略仍由上层定义
-
-### Future Considerations
-- 更细粒度的 graph mutation API
-- 任务与运行态之间更丰富的关系约束
-- 批量/复合领域事件协议
-- 更强的执行治理与恢复能力
-
----
-
-## Risk Assessment
-
-| Risk | Probability | Impact | Mitigation Strategy |
-|------|------------|--------|---------------------|
-| 继续把应用层语义错误地下沉到 core | Med | High | 通过 ports/adapter 边界与 PRD 非目标清单严格限制作用域 |
-| runtime / graph / materialize 语义过度扩张，导致内核复杂度失控 | Med | High | 严格按聚合职责拆分，先保留通用闭环，再处理复合协议 |
-| 扩展槽位变成新的“万能 metadata”黑洞 | High | Med | 为 extensions 建立结构化承载约束，并用契约测试锁住公共类型与快照隔离 |
-| 通知模型过早绑定 transport 或 batch 语义 | Med | High | 当前仅实现单聚合成功提交事件，复合事件明确延后 |
-| 过度追求一次性完整导致实现切片过大 | Med | Med | 在 PRD 范围完整的前提下，实施上仍按小切片分批落地 |
-
----
-
-## Dependencies & Blockers
-
-**Dependencies:**
-- LightTask 当前已有的分层架构、测试基线与当前实现的主链能力
-- task / plan / graph / runtime / output / notify 的现有实现和质量门
-- 上层应用（Linpo / TopoFlow）源码与架构作为需求压力来源，而非数据结构模板
-- 与 `docs/architecture.md` 保持一致：core 提供通用编排能力，不承载应用层策略、transport、平台壳或 provider 细节
-
-**Known Blockers:**
-- 编排事件协议的更细约束目前尚未定义，不应把“已有事件”与“成熟协议”混为一谈
-- graph patch / incremental edit 协议与 output 通用语义虽然重要，但当前仍处于下一阶段设计题目，不能反向阻塞现有主链
-- 如果后续把 runtime 关系或 output 治理直接绑定单一上层应用语义，会破坏当前通用内核边界
-
----
-
-## Appendix
-
-### Glossary
-- **Task**: 核心任务聚合，承接任务状态、步骤、扩展槽位与归属信息
-- **Plan**: 核心计划聚合，承接流程级生命周期与已发布图绑定能力
-- **Graph**: 计划对应的 DAG 结构，包含 draft / published 边界与 draft 编辑入口
-- **Runtime**: 独立运行态聚合，用于表示运行过程而非污染 task/plan 本体，并支持最小关系切片
-- **Output**: 独立输出聚合，用于承接产物/输出的最小生命周期与条件更新
-- **Materialization**: 从已发布图生成/同步任务网的通用编排过程
-- **Launch**: 以最小语义将计划从 ready 进入 confirmed，并闭合 plan -> graph -> task 主链
-- **Notify**: 成功提交后的领域事件发布能力，不绑定具体传输通道；当前覆盖单聚合事件与最小编排事件
-
-### References
-- `README.md`
-- `docs/architecture.md`
-- Linpo: `docs/architecture.md`, `docs/prd.md`, `app/db/models.py`
-- TopoFlow: `src/stores/workflow.js`
-
----
-
-*This PRD was created through interactive requirements gathering with quality scoring to ensure comprehensive coverage of business, functional, UX, and technical dimensions.*
+## 6. 核心场景
+
+### 场景一：流程设计与发布
+
+产品团队需要先设计流程，再决定何时将其投入执行。  
+LightTask 通过草稿图和已发布图两个版本层，支持“设计版本”和“执行版本”并行存在。
+
+### 场景二：计划启动与任务落地
+
+当一个流程进入可启动状态时，系统需要根据已发布图生成任务网络，并让应用层开始执行。  
+LightTask 提供从 `Plan` 到 `Graph` 再到 `Task` 的主链闭环。
+
+### 场景三：执行过程跟踪
+
+在任务真正执行时，应用需要记录执行上下文、关联对象和执行结果。  
+LightTask 用 `Runtime` 承接这类信息，避免把执行细节混入任务或计划本体。
+
+### 场景四：产物交付与留痕
+
+流程执行后常常会产出文本、结构化数据、交付物或附件。  
+LightTask 用 `Output` 统一承接这些结果，便于上层应用做归档、展示和再消费。
+
+### 场景五：事件驱动联动
+
+上层应用通常需要在任务推进、计划发射或结果生成后联动自己的通知与自动化逻辑。  
+LightTask 提供统一的领域事件发布能力，方便应用将这些事实接入自身事件系统。
+
+## 7. 当前版本的产品范围
+
+### 7.1 核心对象能力
+
+当前版本已经把以下对象纳入统一内核：
+
+- 任务
+- 计划
+- 流程图
+- 运行态
+- 输出
+
+每类对象都具备稳定的创建、读取、列出和条件更新能力。
+
+### 7.2 流程图版本能力
+
+当前版本支持：
+
+- 保存流程图草稿
+- 对草稿图做增量编辑
+- 发布已发布图
+- 在再次发布前保持执行版本稳定
+
+### 7.3 计划发射能力
+
+当前版本支持：
+
+- 计划生命周期推进
+- 基于已发布图物化任务
+- 启动计划并关闭主链路
+
+### 7.4 调度事实能力
+
+当前版本支持输出：
+
+- 节点稳定顺序
+- 当前可运行节点
+- 被阻塞节点
+- 已终态节点
+- 阻塞原因
+
+这让上层应用可以在统一事实基础上实现自己的派发策略。
+
+### 7.5 执行与产物能力
+
+当前版本支持：
+
+- 记录运行态上下文、结果和对象关系
+- 记录输出内容、输出项和封板状态
+
+### 7.6 事件能力
+
+当前版本支持在提交成功后发布领域事件，覆盖：
+
+- 单聚合事件
+- 计划任务物化事件
+- 计划发射事件
+
+## 8. 产品要求
+
+### 8.1 对上层应用的产品要求
+
+- 应用团队可以用公共 API 完成端到端主链接入。
+- 应用团队可以基于统一对象构建自己的业务页面和交互层。
+- 应用团队可以保留自己的调度策略和通知策略。
+
+### 8.2 对平台能力的产品要求
+
+- 公共能力需要通过稳定的端口契约接入现有存储和系统能力。
+- 内核输出的状态、结果和事件需要具备清晰的可解释性。
+- 所有核心对象都需要有明确的生命周期边界。
+
+### 8.3 对协作效率的产品要求
+
+- 新应用能够在较短时间内接通“计划到执行”的主链。
+- 核心能力迭代可以集中发生在 LightTask 仓库中。
+- 产品、设计、开发之间可以围绕统一术语协作。
+
+## 9. 本阶段交付重点
+
+当前阶段的重点，是让 LightTask 成为“可被接入、可被复用、可被扩展”的公共底座，因此优先交付以下内容：
+
+1. 面向接入者的清晰文档与完整使用教程
+2. 稳定的核心 API 与端口契约
+3. 流程图发布、任务物化和计划发射闭环
+4. 执行态与产物态的统一承接方式
+5. 领域事件的基础事实流
+
+## 10. 上层应用承接的能力
+
+为了让内核保持长期可复用性，上层应用继续承接以下产品能力：
+
+- 页面布局、视图体验和业务交互
+- 任务派发策略、优先级和审批策略
+- 外部执行器、通知渠道和消息转发
+- 业务专属字段、业务专属规则和业务专属指标
+
+这样的分工可以保证 LightTask 持续作为“公共编排底座”演进，而上层应用继续拥有充足的产品差异化空间。
+
+## 11. 成功标准
+
+LightTask 的产品成功，不以“能力做得越多越好”为标准，而以“是否让上层应用更容易构建”为标准。当前版本的成功标准包括：
+
+- 上层应用能按教程完成最小接入并跑通主链
+- 任务、计划、流程图、运行态、输出的公共模型清晰一致
+- 流程设计版本与执行版本边界明确
+- 调度事实能够直接支撑应用实现执行策略
+- 领域事件能够支撑应用做通知和联动
+
+## 12. 下一阶段关注点
+
+在当前主链稳定后，下一阶段重点关注：
+
+- 更细粒度的流程图增量编辑体验
+- 更成熟的任务治理规则
+- 更丰富的运行态关系表达
+- 更完整的输出协议
+- 更清晰的事件消费规范
+
+这些方向会继续围绕“帮助上层应用更快构建产品”这一核心目标推进。
