@@ -2,14 +2,15 @@ import { cloneOptional } from "./ds-clone";
 import type { StructuredEntityExtensions } from "./ds-extension";
 import type { RevisionState } from "./ds-revision";
 import { createInitialRevision } from "./ds-revision";
-import type { TaskLifecycleStatus } from "./ds-status";
+import type { TaskDesignStatus, TaskLifecycleStatus } from "./ds-status";
 
 export interface TaskRecord extends RevisionState {
   id: string;
   title: string;
   summary?: string;
   planId?: string;
-  status: TaskLifecycleStatus;
+  designStatus?: TaskDesignStatus;
+  executionStatus: TaskLifecycleStatus;
   createdAt: string;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
@@ -21,7 +22,8 @@ export interface CreateTaskRecordInput {
   createdAt: string;
   summary?: string;
   planId?: string;
-  status?: TaskLifecycleStatus;
+  designStatus?: TaskDesignStatus;
+  executionStatus?: TaskLifecycleStatus;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
   idempotencyKey?: string;
@@ -29,6 +31,7 @@ export interface CreateTaskRecordInput {
 
 export function createTaskRecord(input: CreateTaskRecordInput): TaskRecord {
   const revision = createInitialRevision(input.createdAt, input.idempotencyKey);
+  const executionStatus = input.executionStatus ?? "queued";
 
   // 数据结构层只做确定性初始化，不做编排规则。
   return {
@@ -36,7 +39,8 @@ export function createTaskRecord(input: CreateTaskRecordInput): TaskRecord {
     title: input.title.trim(),
     summary: input.summary?.trim() || undefined,
     planId: input.planId,
-    status: input.status ?? "queued",
+    designStatus: input.designStatus ?? "ready",
+    executionStatus,
     createdAt: input.createdAt,
     updatedAt: revision.updatedAt,
     revision: revision.revision,

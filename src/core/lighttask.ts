@@ -45,13 +45,18 @@ import type {
   LightTaskPlan,
   LightTaskRuntime,
   LightTaskTask,
+  ListOutputsInput,
+  ListRuntimesInput,
+  ListTasksInput,
   MaterializePlanTasksInput,
   MaterializePlanTasksResult,
   PublishGraphInput,
   SaveGraphInput,
   UpdatePlanInput,
+  UpdateTaskInput,
 } from "./types";
 import { updatePlanUseCase } from "./update-plan";
+import { updateTaskUseCase } from "./update-task";
 
 /**
  * 这里先只实现通用编排模型，不混入应用层的 UI、平台适配和持久化策略。
@@ -63,16 +68,20 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => createTaskUseCase(this.options, input));
   }
 
-  listTasks(): LightTaskTask[] {
-    return this.runWithErrorBoundary(() => listTasksUseCase(this.options));
+  listTasks(input?: ListTasksInput): LightTaskTask[] {
+    return this.runWithErrorBoundary(() => listTasksUseCase(this.options, input));
   }
 
-  listTasksByPlan(planId: string): LightTaskTask[] {
-    return this.runWithErrorBoundary(() => listTasksByPlanUseCase(this.options, planId));
+  listTasksByPlan(planId: string, input?: Omit<ListTasksInput, "planId">): LightTaskTask[] {
+    return this.runWithErrorBoundary(() => listTasksByPlanUseCase(this.options, planId, input));
   }
 
   getTask(taskId: string): LightTaskTask | undefined {
     return this.runWithErrorBoundary(() => getTaskUseCase(this.options, taskId));
+  }
+
+  updateTask(taskId: string, input: UpdateTaskInput): LightTaskTask {
+    return this.runWithErrorBoundary(() => updateTaskUseCase(this.options, taskId, input));
   }
 
   advanceTask(taskId: string, input: AdvanceTaskInput): LightTaskTask {
@@ -103,8 +112,8 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => createRuntimeUseCase(this.options, input));
   }
 
-  listRuntimes(): LightTaskRuntime[] {
-    return this.runWithErrorBoundary(() => listRuntimesUseCase(this.options));
+  listRuntimes(input?: ListRuntimesInput): LightTaskRuntime[] {
+    return this.runWithErrorBoundary(() => listRuntimesUseCase(this.options, input));
   }
 
   getRuntime(runtimeId: string): LightTaskRuntime | undefined {
@@ -119,8 +128,8 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => createOutputUseCase(this.options, input));
   }
 
-  listOutputs(): LightTaskOutput[] {
-    return this.runWithErrorBoundary(() => listOutputsUseCase(this.options));
+  listOutputs(input?: ListOutputsInput): LightTaskOutput[] {
+    return this.runWithErrorBoundary(() => listOutputsUseCase(this.options, input));
   }
 
   getOutput(outputId: string): LightTaskOutput | undefined {

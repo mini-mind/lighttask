@@ -2,11 +2,12 @@ import { cloneValue } from "./ds-clone";
 
 export type DomainEventType =
   | "task.created"
+  | "task.updated"
   | "task.advanced"
   | "plan.created"
   | "plan.updated"
   | "plan.advanced"
-  | "plan.tasks_materialized"
+  | "plan.task_provenance_synced"
   | "plan.launched"
   | "graph.saved"
   | "graph.published"

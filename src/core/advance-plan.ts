@@ -1,10 +1,6 @@
 import { bumpRevision } from "../data-structures";
-import {
-  assertExpectedRevision,
-  assertNextRevision,
-  selectDefaultPlanAction,
-  transitionPlanStatus,
-} from "../rules";
+import { assertExpectedRevision, assertNextRevision } from "../rules";
+import { resolvePlanLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -39,6 +35,7 @@ export function advancePlanUseCase(
   input: AdvancePlanInput,
 ): LightTaskPlan {
   const publishEvent = resolveNotifyPublisher(options);
+  const planLifecycle = resolvePlanLifecyclePolicy(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const saveIfRevisionMatches = requireLightTaskFunction(
     options.planRepository?.saveIfRevisionMatches,
@@ -65,7 +62,7 @@ export function advancePlanUseCase(
   }
 
   const plan = clonePersistedPlan(storedPlan);
-  const action = input.action ?? selectDefaultPlanAction(plan.status);
+  const action = input.action ?? planLifecycle.selectDefaultAction(plan.status);
 
   if (!action) {
     throwLightTaskError(
@@ -79,7 +76,7 @@ export function advancePlanUseCase(
   assertExpectedRevision(plan.revision, input.expectedRevision);
   assertNextRevision(plan.revision, plan.revision + 1);
 
-  const transition = transitionPlanStatus(plan.status, action);
+  const transition = planLifecycle.transition(plan.status, action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }

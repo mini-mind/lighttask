@@ -105,6 +105,32 @@ test("规则层 DAG：重复节点可识别", () => {
   ]);
 });
 
+test("规则层 DAG：重复节点 taskId 可识别", () => {
+  const snapshot = createGraphSnapshot({
+    nodes: [
+      { id: "n1", taskId: "task_shared", label: "节点一" },
+      { id: "n2", taskId: "task_shared", label: "节点二" },
+    ],
+    edges: [],
+    createdAt: NOW,
+  });
+  const validation = validateDagSnapshot(snapshot);
+
+  assert.equal(validation.ok, false);
+  assert.deepEqual(validation.errors, [
+    {
+      code: "VALIDATION_ERROR",
+      message: "检测到重复节点 taskId",
+      details: {
+        taskId: "task_shared",
+        nodeId: "n2",
+        nodeIndex: 1,
+        duplicateOfNodeId: "n1",
+      },
+    },
+  ]);
+});
+
 test("规则层 DAG：重复边可识别", () => {
   const snapshot = createSnapshot(
     ["n1", "n2"],

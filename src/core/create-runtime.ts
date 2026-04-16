@@ -4,6 +4,7 @@ import {
   type RuntimeRelatedRef,
   createRuntimeRecord,
 } from "../data-structures";
+import { resolveRuntimeLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -99,6 +100,7 @@ export function createRuntimeUseCase(
   input: CreateRuntimeInput,
 ): LightTaskRuntime {
   const publishEvent = resolveNotifyPublisher(options);
+  const runtimeLifecycle = resolveRuntimeLifecyclePolicy(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const createRuntime = requireLightTaskFunction(
     options.runtimeRepository?.create,
@@ -140,6 +142,7 @@ export function createRuntimeUseCase(
     kind,
     title,
     createdAt: clockNow(),
+    status: runtimeLifecycle.initialStatus,
     parentRef,
     ownerRef,
     relatedRefs,

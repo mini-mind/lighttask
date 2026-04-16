@@ -1,18 +1,20 @@
-import { isTaskTerminalStatus } from "../data-structures";
 import { findReadyNodeIds, topologicalSort, validateDagSnapshot } from "../rules";
+import { resolvePlanSchedulingPolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
-import { readMaterializedTaskProvenance } from "./materialized-task-governance";
+import {
+  clonePersistedTask,
+  resolveTaskDesignStatus,
+  resolveTaskExecutionStatus,
+} from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
   GetPlanSchedulingFactsInput,
   GetPlanSchedulingFactsResult,
   PersistedLightTask,
-  PlanSchedulingBlockReason,
-  SchedulingFactUnmetPrerequisite,
 } from "./types";
 
 const PUBLISHED_GRAPH_SCOPE = "published" as const;
@@ -61,38 +63,36 @@ function assertExpectedPublishedGraphRevision(
   }
 }
 
-function mapMaterializedTasksByNodeId(
+function mapPlanTasksByNodeId(
   tasks: PersistedLightTask[],
   planId: string,
+  nodes: ReadonlyArray<{ id: string; taskId: string }>,
 ): Map<string, PersistedLightTask> {
   const tasksByNodeId = new Map<string, PersistedLightTask>();
+  const directTasksById = new Map<string, PersistedLightTask>();
 
   for (const task of tasks) {
-    if (task.planId !== planId) {
+    const normalizedTask = clonePersistedTask(task);
+    directTasksById.set(normalizedTask.id, normalizedTask);
+  }
+
+  for (const node of nodes) {
+    const directTask = directTasksById.get(node.taskId);
+    if (!directTask) {
       continue;
     }
 
-    const provenance = readMaterializedTaskProvenance(task);
-    if (!provenance) {
-      continue;
-    }
-
-    if (provenance.governance?.state === "orphaned") {
-      continue;
-    }
-
-    const existed = tasksByNodeId.get(provenance.source.nodeId);
-    if (existed) {
+    if (directTask.planId !== planId) {
       throwLightTaskError(
-        createLightTaskError("STATE_CONFLICT", "检测到重复的计划任务物化 provenance", {
+        createLightTaskError("STATE_CONFLICT", "图节点引用的任务未归属当前计划", {
           planId,
-          nodeId: provenance.source.nodeId,
-          taskIds: [existed.id, task.id],
+          nodeId: node.id,
+          taskId: directTask.id,
+          taskPlanId: directTask.planId,
         }),
       );
     }
-
-    tasksByNodeId.set(provenance.source.nodeId, task);
+    tasksByNodeId.set(node.id, directTask);
   }
 
   return tasksByNodeId;
@@ -115,72 +115,12 @@ function buildPrerequisiteNodeIdsByNode(
   return prerequisiteNodeIdsByNode;
 }
 
-function resolveBlockReason(input: {
-  isReady: boolean;
-  isTerminal: boolean;
-  task: PersistedLightTask | undefined;
-  prerequisiteNodeIds: string[];
-  completedNodeIdSet: ReadonlySet<string>;
-  tasksByNodeId: ReadonlyMap<string, PersistedLightTask>;
-}): PlanSchedulingBlockReason | undefined {
-  if (input.isTerminal) {
-    return undefined;
-  }
-
-  if (!input.isReady) {
-    const unmetPrerequisites: SchedulingFactUnmetPrerequisite[] = input.prerequisiteNodeIds
-      .filter((nodeId) => !input.completedNodeIdSet.has(nodeId))
-      .map((nodeId) => ({
-        nodeId,
-        taskStatus: input.tasksByNodeId.get(nodeId)?.status,
-      }));
-
-    return {
-      code: "waiting_for_prerequisites",
-      unmetPrerequisites,
-    };
-  }
-
-  if (!input.task) {
-    return {
-      code: "missing_task",
-    };
-  }
-
-  switch (input.task.status) {
-    case "queued":
-      return undefined;
-    case "dispatched":
-      return {
-        code: "task_dispatched",
-        taskStatus: "dispatched",
-      };
-    case "running":
-      return {
-        code: "task_running",
-        taskStatus: "running",
-      };
-    case "blocked_by_approval":
-      return {
-        code: "task_blocked_by_approval",
-        taskStatus: "blocked_by_approval",
-      };
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return undefined;
-    default: {
-      const exhaustiveStatus: never = input.task.status;
-      return exhaustiveStatus;
-    }
-  }
-}
-
 export function getPlanSchedulingFactsUseCase(
   options: CreateLightTaskOptions,
   planId: string,
   input: GetPlanSchedulingFactsInput,
 ): GetPlanSchedulingFactsResult {
+  const schedulingPolicy = resolvePlanSchedulingPolicy(options);
   const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const getGraph = requireLightTaskFunction(options.graphRepository?.get, "graphRepository.get");
   const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
@@ -211,9 +151,12 @@ export function getPlanSchedulingFactsUseCase(
 
   const orderedNodeIds = topologicalSort(publishedGraph);
   const validation = validateDagSnapshot(publishedGraph);
-  const tasksByNodeId = mapMaterializedTasksByNodeId(listTasks(), normalizedPlanId);
+  const tasksByNodeId = mapPlanTasksByNodeId(listTasks(), normalizedPlanId, publishedGraph.nodes);
   const completedNodeIdSet = new Set(
-    orderedNodeIds.filter((nodeId) => tasksByNodeId.get(nodeId)?.status === "completed"),
+    orderedNodeIds.filter((nodeId) => {
+      const task = tasksByNodeId.get(nodeId);
+      return task ? schedulingPolicy.isTaskCompleted(task) : false;
+    }),
   );
   const readyNodeIdSet = new Set(findReadyNodeIds(publishedGraph, completedNodeIdSet));
   const prerequisiteNodeIdsByNode = buildPrerequisiteNodeIdsByNode(
@@ -230,25 +173,28 @@ export function getPlanSchedulingFactsUseCase(
     }
 
     const task = tasksByNodeId.get(nodeId);
-    const isTerminal = task ? isTaskTerminalStatus(task.status) : false;
+    const isTerminal = task ? schedulingPolicy.isTaskTerminal(task) : false;
     // ready 仅表示图依赖已经满足，terminal 节点不会再被视为 ready 候选。
     const isReady = readyNodeIdSet.has(nodeId) && !isTerminal;
-    // runnable 进一步收窄为“图 ready 且已有 queued 任务”，不替上层做派发策略。
-    const isRunnable = isReady && task?.status === "queued";
-    const blockReason = resolveBlockReason({
-      isReady,
-      isTerminal,
+    // runnable 统一由调度策略计算，默认策略保持“ready + 初始状态任务”的判定语义。
+    const context = {
+      nodeId,
       task,
       prerequisiteNodeIds: prerequisiteNodeIdsByNode.get(nodeId) ?? [],
       completedNodeIdSet,
       tasksByNodeId,
-    });
+      isReady,
+      isTerminal,
+    } as const;
+    const isRunnable = schedulingPolicy.isTaskRunnable(context);
+    const blockReason = schedulingPolicy.resolveBlockReason(context);
 
     byNodeId[nodeId] = {
       nodeId,
       graphTaskId: node.taskId,
       taskId: task?.id,
-      taskStatus: task?.status,
+      taskDesignStatus: task ? resolveTaskDesignStatus(task.designStatus) : undefined,
+      taskStatus: task ? resolveTaskExecutionStatus(task) : undefined,
       isReady,
       isRunnable,
       isTerminal,
@@ -268,9 +214,10 @@ export function getPlanSchedulingFactsUseCase(
       return Boolean(facts && !facts.isTerminal && !facts.isRunnable);
     }),
     terminalNodeIds: orderedNodeIds.filter((nodeId) => byNodeId[nodeId]?.isTerminal),
-    completedNodeIds: orderedNodeIds.filter(
-      (nodeId) => byNodeId[nodeId]?.taskStatus === "completed",
-    ),
+    completedNodeIds: orderedNodeIds.filter((nodeId) => {
+      const task = tasksByNodeId.get(nodeId);
+      return task ? schedulingPolicy.isTaskCompleted(task) : false;
+    }),
     byNodeId,
   };
 }

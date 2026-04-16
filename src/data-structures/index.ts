@@ -5,11 +5,17 @@ export type {
 } from "./ds-extension";
 
 export type {
+  TaskDesignStatus,
   TaskLifecycleStatus,
   PlanLifecycleStatus,
   RuntimeLifecycleStatus,
 } from "./ds-status";
 export {
+  DEFAULT_PLAN_TERMINAL_STATUSES,
+  DEFAULT_RUNTIME_TERMINAL_STATUSES,
+  DEFAULT_TASK_TERMINAL_STATUSES,
+  TASK_DESIGN_STATUSES,
+  isTaskDesignStatus,
   isTaskTerminalStatus,
   isPlanTerminalStatus,
   isRuntimeTerminalStatus,

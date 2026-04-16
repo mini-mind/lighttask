@@ -1,10 +1,11 @@
 import { advancePlanUseCase } from "./advance-plan";
+import { collectPublishedPlanTasks } from "./collect-published-plan-tasks";
+import { runInConsistencyBoundary } from "./consistency-boundary";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
-import { materializePlanTasksUseCase } from "./materialize-plan-tasks";
 import { publishPlanLaunchedEvent, resolveNotifyPublisher } from "./notify-event";
 import type { CreateLightTaskOptions, LaunchPlanInput, LaunchPlanResult } from "./types";
 
@@ -67,19 +68,31 @@ export function launchPlanUseCase(
     );
   }
 
-  const materialized = materializePlanTasksUseCase(options, normalizedPlanId, {
-    expectedPublishedGraphRevision: input.expectedPublishedGraphRevision,
-    removedNodePolicy: "keep",
-  });
-  const confirmedPlan = advancePlanUseCase(options, normalizedPlanId, {
-    expectedRevision: input.expectedRevision,
-    action: "confirm",
-  });
+  const { published, confirmedPlan } = runInConsistencyBoundary(
+    options,
+    `launchPlan:${normalizedPlanId}`,
+    () => {
+      const published = collectPublishedPlanTasks({
+        options,
+        planId: normalizedPlanId,
+        expectedPublishedGraphRevision: input.expectedPublishedGraphRevision,
+      });
+      const confirmedPlan = advancePlanUseCase(options, normalizedPlanId, {
+        expectedRevision: input.expectedRevision,
+        action: "confirm",
+      });
+
+      return {
+        published,
+        confirmedPlan,
+      };
+    },
+  );
 
   const result = {
     plan: confirmedPlan,
-    publishedGraph: materialized.publishedGraph,
-    tasks: materialized.tasks,
+    publishedGraph: published.publishedGraph,
+    tasks: published.tasks,
   };
 
   publishPlanLaunchedEvent(publishEvent, result);

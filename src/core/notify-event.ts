@@ -16,12 +16,13 @@ import type {
   PlanAdvancedEvent,
   PlanCreatedEvent,
   PlanLaunchedEvent,
-  PlanTasksMaterializedEvent,
+  PlanTaskProvenanceSyncedEvent,
   PlanUpdatedEvent,
   RuntimeAdvancedEvent,
   RuntimeCreatedEvent,
   TaskAdvancedEvent,
   TaskCreatedEvent,
+  TaskUpdatedEvent,
 } from "./types";
 
 type EventPublisher = NotifyPort<LightTaskDomainEvent>["publish"];
@@ -32,16 +33,15 @@ function createEventId(type: LightTaskDomainEvent["type"], aggregateId: string, 
   return `${type}:${aggregateId}:r${revision}`;
 }
 
-function createTaskEvent<TType extends TaskCreatedEvent["type"] | TaskAdvancedEvent["type"]>(
-  type: TType,
-  task: LightTaskTask,
-): Extract<LightTaskDomainEvent, { type: TType }> {
+function createTaskEvent<
+  TType extends TaskCreatedEvent["type"] | TaskUpdatedEvent["type"] | TaskAdvancedEvent["type"],
+>(type: TType, task: LightTaskTask): Extract<LightTaskDomainEvent, { type: TType }> {
   return createDomainEvent({
     id: createEventId(type, task.id, task.revision),
     type,
     aggregate: "task",
     aggregateId: task.id,
-    occurredAt: task.createdAt,
+    occurredAt: task.updatedAt ?? task.createdAt,
     revision: task.revision,
     idempotencyKey: task.idempotencyKey,
     payload: {
@@ -68,7 +68,7 @@ function createPlanEvent<
 }
 
 function createPlanOrchestrationEvent<
-  TType extends PlanTasksMaterializedEvent["type"] | PlanLaunchedEvent["type"],
+  TType extends PlanTaskProvenanceSyncedEvent["type"] | PlanLaunchedEvent["type"],
 >(
   type: TType,
   input: {
@@ -169,6 +169,15 @@ export function publishTaskCreatedEvent(
   return event;
 }
 
+export function publishTaskUpdatedEvent(
+  publish: EventPublisher,
+  task: LightTaskTask,
+): TaskUpdatedEvent {
+  const event = createTaskEvent("task.updated", task);
+  publish(event);
+  return event;
+}
+
 export function publishTaskAdvancedEvent(
   publish: EventPublisher,
   task: LightTaskTask,
@@ -205,17 +214,17 @@ export function publishPlanAdvancedEvent(
   return event;
 }
 
-export function publishPlanTasksMaterializedEvent(
+export function publishPlanTaskProvenanceSyncedEvent(
   publish: EventPublisher,
   input: {
     plan: LightTaskPlan;
     publishedGraph: LightTaskGraph;
     tasks: LightTaskTask[];
   },
-): PlanTasksMaterializedEvent {
-  const event = createPlanOrchestrationEvent("plan.tasks_materialized", {
+): PlanTaskProvenanceSyncedEvent {
+  const event = createPlanOrchestrationEvent("plan.task_provenance_synced", {
     ...input,
-    // 首个编排事件切片将 revision 绑定到已发布图 revision，便于消费者感知物化来源图版本。
+    // 事件绑定到已发布图 revision，表示这批任务已完成该版本关系 provenance 同步。
     revision: input.publishedGraph.revision,
     occurredAt: input.publishedGraph.updatedAt,
     idempotencyKey: input.publishedGraph.idempotencyKey,

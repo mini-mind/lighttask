@@ -54,7 +54,7 @@ test("LightTask 公共 API 在同幂等键同版本重复推进时返回 replay 
     idempotencyKey: "req_replay_1",
   });
 
-  assert.equal(first.status, "dispatched");
+  assert.equal(first.executionStatus, "dispatched");
   assert.equal(first.revision, 2);
   assert.deepEqual(replay, first);
 });
@@ -110,7 +110,7 @@ test("LightTask 幂等 replay 不应触发额外写入副作用", () => {
   assert.equal(saveCount, 1);
   assert.deepEqual(replay, first);
   assert.equal(snapshots[0].revision, 2);
-  assert.equal(snapshots[0].status, "dispatched");
+  assert.equal(snapshots[0].executionStatus, "dispatched");
 });
 
 test("LightTask 幂等 replay 返回快照也必须与内部状态隔离", () => {
@@ -185,7 +185,7 @@ test("LightTask 公共 API 传入空白幂等键时会回退为历史幂等键",
     idempotencyKey: "   ",
   });
 
-  assert.equal(second.status, "running");
+  assert.equal(second.executionStatus, "running");
   assert.equal(second.revision, 3);
   assert.equal(second.idempotencyKey, "req_keep");
 });

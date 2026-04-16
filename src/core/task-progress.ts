@@ -1,10 +1,13 @@
-import type { TaskAction } from "../rules";
-import { resolveTaskStepProgress } from "../rules";
+import type { TaskAction, TaskLifecyclePolicy } from "../rules";
 import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
 import type { PersistedLightTask } from "./types";
 
-export function applyTaskStepProgress(task: PersistedLightTask, action: TaskAction): void {
-  const progressPolicy = resolveTaskStepProgress(action);
+export function applyTaskStepProgress(
+  task: PersistedLightTask,
+  action: TaskAction,
+  taskLifecycle: TaskLifecyclePolicy,
+): void {
+  const progressPolicy = taskLifecycle.resolveStepProgress(action);
   if (progressPolicy === "complete_all") {
     // completed 代表流程闭环，剩余步骤统一收敛为 done，避免状态和步骤语义错位。
     markAllRemainingStepsDone(task);

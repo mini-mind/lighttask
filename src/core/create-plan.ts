@@ -1,4 +1,5 @@
 import { createPlanSessionRecord } from "../data-structures";
+import { resolvePlanLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -18,6 +19,7 @@ export function createPlanUseCase(
   input: CreatePlanInput,
 ): LightTaskPlan {
   const publishEvent = resolveNotifyPublisher(options);
+  const planLifecycle = resolvePlanLifecyclePolicy(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const createPlan = requireLightTaskFunction(
     options.planRepository?.create,
@@ -46,6 +48,7 @@ export function createPlanUseCase(
     id: planId,
     title,
     createdAt: clockNow(),
+    status: planLifecycle.initialStatus,
     metadata: input.metadata,
     extensions: input.extensions,
   });

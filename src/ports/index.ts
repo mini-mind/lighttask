@@ -4,6 +4,7 @@ export type { PlanRepository, PlanRepositoryWriteResult } from "./port-plan-repo
 export type { RuntimeRepository, RuntimeRepositoryWriteResult } from "./port-runtime-repo";
 export type { OutputRepository, OutputRepositoryWriteResult } from "./port-output-repo";
 export type { NotifyPort } from "./port-notify";
+export type { ConsistencyPort } from "./port-consistency";
 export type {
   GraphRepository,
   GraphRepositoryWriteResult,

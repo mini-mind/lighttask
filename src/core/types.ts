@@ -17,6 +17,7 @@ import type {
 } from "../data-structures";
 import type {
   ClockPort,
+  ConsistencyPort,
   GraphRepository,
   IdGeneratorPort,
   NotifyPort,
@@ -28,14 +29,21 @@ import type {
 import type {
   GraphEditOperation,
   PlanAction,
+  PlanLifecyclePolicy,
   RuntimeAction,
+  RuntimeLifecyclePolicy,
   TaskAction,
+  TaskLifecyclePolicy,
   TaskLifecycleStatus,
 } from "../rules";
 
 export type TaskStage = "investigate" | "design" | "implement" | "verify" | "converge";
 
 export type StepStatus = "todo" | "doing" | "done";
+
+export type TaskDesignStatus = import("../data-structures").TaskDesignStatus;
+
+export type TaskExecutionStatus = TaskLifecycleStatus;
 
 export interface LightTaskStep {
   id: string;
@@ -49,10 +57,12 @@ export interface LightTaskTask {
   planId?: string;
   title: string;
   summary?: string;
-  status: TaskLifecycleStatus;
+  designStatus?: TaskDesignStatus;
+  executionStatus: TaskExecutionStatus;
   revision: number;
   idempotencyKey?: string;
   createdAt: string;
+  updatedAt?: string;
   steps: LightTaskStep[];
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
@@ -136,6 +146,8 @@ export interface PersistedLightOutput extends LightTaskOutput {}
 export interface CreateTaskInput {
   title: string;
   summary?: string;
+  planId?: string;
+  designStatus?: TaskDesignStatus;
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
 }
@@ -176,6 +188,16 @@ export interface AdvanceTaskInput {
   action?: TaskAction;
   expectedRevision: number;
   idempotencyKey?: string;
+}
+
+export interface UpdateTaskInput {
+  expectedRevision: number;
+  planId?: string;
+  title?: string;
+  summary?: string | null;
+  designStatus?: TaskDesignStatus;
+  metadata?: Record<string, unknown> | null;
+  extensions?: StructuredEntityExtensions | null;
 }
 
 export interface AdvancePlanInput {
@@ -243,17 +265,72 @@ export type MaterializedPlanTaskGovernance =
 export interface MaterializedPlanTaskProvenance extends Record<string, unknown> {
   kind: "materialized_plan_task";
   source: MaterializedPlanTaskSource;
-  governance?: MaterializedPlanTaskGovernance;
+  governance: MaterializedPlanTaskGovernance;
 }
 
-export type MaterializeRemovedNodePolicy = "keep";
+export type MaterializeRemovedNodePolicy = "soft_delete" | "keep";
+
+export interface TaskExecutionStatusQuery {
+  in: TaskLifecycleStatus[];
+}
+
+export interface TaskDesignStatusQuery {
+  in: TaskDesignStatus[];
+}
+
+export interface MaterializedTaskSourceQuery {
+  nodeId?: string;
+  nodeTaskId?: string;
+  graphRevision?: number;
+  governanceState?: MaterializedPlanTaskGovernance["state"];
+}
+
+export interface ListTasksInput {
+  planId?: string;
+  executionStatus?: TaskLifecycleStatus | TaskExecutionStatusQuery;
+  designStatus?: TaskDesignStatus | TaskDesignStatusQuery;
+  materializedSource?: MaterializedTaskSourceQuery;
+  includeOrphaned?: boolean;
+}
+
+export interface RuntimeStatusQuery {
+  in: RuntimeLifecycleStatus[];
+}
+
+export interface RuntimeRefQuery {
+  kind: string;
+  id: string;
+}
+
+export interface ListRuntimesInput {
+  kind?: string;
+  status?: RuntimeLifecycleStatus | RuntimeStatusQuery;
+  ownerRef?: RuntimeRefQuery;
+  parentRef?: RuntimeRefQuery;
+  relatedRef?: RuntimeRefQuery;
+}
+
+export interface OutputStatusQuery {
+  in: OutputLifecycleStatus[];
+}
+
+export interface OutputRefQuery {
+  kind: string;
+  id: string;
+}
+
+export interface ListOutputsInput {
+  kind?: string;
+  status?: OutputLifecycleStatus | OutputStatusQuery;
+  runtimeRef?: OutputRuntimeRef;
+  ownerRef?: OutputRefQuery;
+}
 
 export interface MaterializePlanTasksInput {
   expectedPublishedGraphRevision: number;
   /**
-   * 首个治理切片只显式支持 keep：
-   * 已从当前已发布图移除的旧物化任务继续保留在仓储中，
-   * 并被标记为 orphaned，但不会出现在本次物化返回结果里。
+   * soft_delete：将已从图中移除的旧物化任务标记为 orphaned，并在默认查询中隐藏。
+   * keep：保留旧任务当前治理状态，允许应用层自行接管后续治理。
    */
   removedNodePolicy?: MaterializeRemovedNodePolicy;
 }
@@ -282,6 +359,10 @@ export type PlanSchedulingBlockReason =
       code: "missing_task";
     }
   | {
+      code: "task_design_incomplete";
+      taskDesignStatus: TaskDesignStatus;
+    }
+  | {
       code: "task_dispatched";
       taskStatus: "dispatched";
     }
@@ -292,12 +373,34 @@ export type PlanSchedulingBlockReason =
   | {
       code: "task_blocked_by_approval";
       taskStatus: "blocked_by_approval";
+    }
+  | {
+      code: "task_waiting_transition";
+      taskStatus: TaskLifecycleStatus;
     };
+
+export interface PlanSchedulingPolicyContext {
+  nodeId: string;
+  task?: PersistedLightTask;
+  prerequisiteNodeIds: string[];
+  completedNodeIdSet: ReadonlySet<string>;
+  tasksByNodeId: ReadonlyMap<string, PersistedLightTask>;
+  isReady: boolean;
+  isTerminal: boolean;
+}
+
+export interface PlanSchedulingPolicy {
+  isTaskCompleted(task: PersistedLightTask): boolean;
+  isTaskTerminal(task: PersistedLightTask): boolean;
+  isTaskRunnable(context: PlanSchedulingPolicyContext): boolean;
+  resolveBlockReason(context: PlanSchedulingPolicyContext): PlanSchedulingBlockReason | undefined;
+}
 
 export interface PlanSchedulingNodeFacts {
   nodeId: string;
   graphTaskId: string;
   taskId?: string;
+  taskDesignStatus?: TaskDesignStatus;
   taskStatus?: TaskLifecycleStatus;
   isReady: boolean;
   isRunnable: boolean;
@@ -332,12 +435,13 @@ export interface LaunchPlanResult {
 export type LightTaskDomainEventType = DomainEventType;
 
 export type TaskCreatedEvent = DomainEvent<"task.created", { task: LightTaskTask }>;
+export type TaskUpdatedEvent = DomainEvent<"task.updated", { task: LightTaskTask }>;
 export type TaskAdvancedEvent = DomainEvent<"task.advanced", { task: LightTaskTask }>;
 export type PlanCreatedEvent = DomainEvent<"plan.created", { plan: LightTaskPlan }>;
 export type PlanUpdatedEvent = DomainEvent<"plan.updated", { plan: LightTaskPlan }>;
 export type PlanAdvancedEvent = DomainEvent<"plan.advanced", { plan: LightTaskPlan }>;
-export type PlanTasksMaterializedEvent = DomainEvent<
-  "plan.tasks_materialized",
+export type PlanTaskProvenanceSyncedEvent = DomainEvent<
+  "plan.task_provenance_synced",
   {
     plan: LightTaskPlan;
     publishedGraph: LightTaskGraph;
@@ -373,11 +477,12 @@ export type OutputAdvancedEvent = DomainEvent<"output.advanced", { output: Light
 
 export type LightTaskDomainEvent =
   | TaskCreatedEvent
+  | TaskUpdatedEvent
   | TaskAdvancedEvent
   | PlanCreatedEvent
   | PlanUpdatedEvent
   | PlanAdvancedEvent
-  | PlanTasksMaterializedEvent
+  | PlanTaskProvenanceSyncedEvent
   | PlanLaunchedEvent
   | GraphSavedEvent
   | GraphPublishedEvent
@@ -397,15 +502,21 @@ export interface CreateLightTaskOptions {
   runtimeRepository?: LazyValidatedPort<RuntimeRepository<PersistedLightRuntime>>;
   outputRepository?: LazyValidatedPort<OutputRepository<PersistedLightOutput>>;
   notify?: LazyValidatedPort<NotifyPort<LightTaskDomainEvent>>;
+  consistency?: LazyValidatedPort<ConsistencyPort>;
   clock: LazyValidatedPort<ClockPort>;
   idGenerator: LazyValidatedPort<IdGeneratorPort>;
+  taskLifecycle?: TaskLifecyclePolicy;
+  planLifecycle?: PlanLifecyclePolicy;
+  runtimeLifecycle?: RuntimeLifecyclePolicy;
+  scheduling?: Partial<PlanSchedulingPolicy>;
 }
 
 export interface LightTaskKernel {
   createTask(input: CreateTaskInput): LightTaskTask;
-  listTasks(): LightTaskTask[];
-  listTasksByPlan(planId: string): LightTaskTask[];
+  listTasks(input?: ListTasksInput): LightTaskTask[];
+  listTasksByPlan(planId: string, input?: Omit<ListTasksInput, "planId">): LightTaskTask[];
   getTask(taskId: string): LightTaskTask | undefined;
+  updateTask(taskId: string, input: UpdateTaskInput): LightTaskTask;
   advanceTask(taskId: string, input: AdvanceTaskInput): LightTaskTask;
   createPlan(input: CreatePlanInput): LightTaskPlan;
   listPlans(): LightTaskPlan[];
@@ -413,11 +524,11 @@ export interface LightTaskKernel {
   updatePlan(planId: string, input: UpdatePlanInput): LightTaskPlan;
   advancePlan(planId: string, input: AdvancePlanInput): LightTaskPlan;
   createRuntime(input: CreateRuntimeInput): LightTaskRuntime;
-  listRuntimes(): LightTaskRuntime[];
+  listRuntimes(input?: ListRuntimesInput): LightTaskRuntime[];
   getRuntime(runtimeId: string): LightTaskRuntime | undefined;
   advanceRuntime(runtimeId: string, input: AdvanceRuntimeInput): LightTaskRuntime;
   createOutput(input: CreateOutputInput): LightTaskOutput;
-  listOutputs(): LightTaskOutput[];
+  listOutputs(input?: ListOutputsInput): LightTaskOutput[];
   getOutput(outputId: string): LightTaskOutput | undefined;
   advanceOutput(outputId: string, input: AdvanceOutputInput): LightTaskOutput;
   getGraph(planId: string): LightTaskGraph | undefined;

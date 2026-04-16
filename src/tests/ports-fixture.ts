@@ -15,6 +15,7 @@ import {
   createInMemoryPlanRepository,
   createInMemoryRuntimeRepository,
   createInMemoryTaskRepository,
+  createNoopConsistencyPort,
   createSystemClock,
   createTaskIdGenerator,
 } from "../ports/in-memory";
@@ -37,7 +38,7 @@ type InvalidDependencyCase = {
 export function createTestLightTaskOptions(
   overrides: Partial<TestLightTaskOptions> = {},
 ): TestLightTaskOptions {
-  return {
+  const options: TestLightTaskOptions = {
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<TaskRecordFixture>(),
     planRepository: overrides.planRepository ?? createInMemoryPlanRepository<LightTaskPlan>(),
     graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<LightTaskGraph>(),
@@ -46,9 +47,24 @@ export function createTestLightTaskOptions(
     outputRepository:
       overrides.outputRepository ?? createInMemoryOutputRepository<OutputRecordFixture>(),
     notify: overrides.notify ?? createInMemoryNotifyCollector(),
+    consistency: overrides.consistency ?? createNoopConsistencyPort(),
     clock: overrides.clock ?? createSystemClock(),
     idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),
   };
+
+  if (overrides.taskLifecycle) {
+    options.taskLifecycle = overrides.taskLifecycle;
+  }
+  if (overrides.planLifecycle) {
+    options.planLifecycle = overrides.planLifecycle;
+  }
+  if (overrides.runtimeLifecycle) {
+    options.runtimeLifecycle = overrides.runtimeLifecycle;
+  }
+  if (overrides.scheduling) {
+    options.scheduling = overrides.scheduling;
+  }
+  return options;
 }
 
 export function assertInvalidDependencyCases(

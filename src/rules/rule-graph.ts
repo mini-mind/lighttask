@@ -479,6 +479,7 @@ export function validateDagSnapshot(
   const nodeIds: string[] = [];
 
   const nodeIdSet = new Set<string>();
+  const nodeIdByTaskId = new Map<string, string>();
   const edgeIdSet = new Set<string>();
   const edgeKeySet = new Set<string>();
   const normalizedEdgeSet = new Set<string>();
@@ -499,6 +500,21 @@ export function validateDagSnapshot(
     }
 
     nodeIdSet.add(node.id);
+
+    const duplicatedNodeId = nodeIdByTaskId.get(node.taskId);
+    if (duplicatedNodeId) {
+      errors.push(
+        createValidationError("检测到重复节点 taskId", {
+          taskId: node.taskId,
+          nodeId: node.id,
+          nodeIndex: index,
+          duplicateOfNodeId: duplicatedNodeId,
+        }),
+      );
+      continue;
+    }
+
+    nodeIdByTaskId.set(node.taskId, node.id);
   }
 
   for (let index = 0; index < snapshot.edges.length; index += 1) {

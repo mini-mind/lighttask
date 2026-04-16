@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PlanLifecycleStatus, TaskLifecycleStatus } from "../data-structures";
+import {
+  type PlanLifecycleStatus,
+  type TaskLifecycleStatus,
+  createCoreError,
+} from "../data-structures";
 import {
   type PlanAction,
   type TaskAction,
   canPlanTransition,
   canTaskTransition,
+  createPlanLifecyclePolicy,
+  createRuntimeLifecyclePolicy,
+  createTaskLifecyclePolicy,
   getNextPlanStatus,
   getNextTaskStatus,
   listPlanActions,
@@ -222,4 +229,98 @@ test("规则层 FSM：步骤推进策略由规则层统一给出", () => {
   assert.equal(resolveTaskStepProgress("request_approval"), "none");
   assert.equal(resolveTaskStepProgress("approve"), "none");
   assert.equal(resolveTaskStepProgress("cancel"), "none");
+});
+
+test("规则层 FSM：支持创建自定义 Task 生命周期策略", () => {
+  const policy = createTaskLifecyclePolicy({
+    initialStatus: "backlog",
+    transitionTable: {
+      backlog: {
+        dispatch: "active",
+      },
+      active: {
+        ship: "done",
+      },
+      done: {},
+    },
+    terminalStatuses: ["done"],
+    defaultActionPriority: ["dispatch", "ship"],
+    stepProgressByAction: {
+      dispatch: "advance_one",
+      ship: "complete_all",
+    },
+  });
+
+  assert.equal(policy.initialStatus, "backlog");
+  assert.equal(policy.selectDefaultAction("backlog"), "dispatch");
+  assert.equal(policy.resolveStepProgress("ship"), "complete_all");
+  assert.equal(policy.transition("backlog", "dispatch").ok, true);
+  assert.equal(policy.transition("done", "ship").ok, false);
+  assert.deepEqual(policy.listActions("active"), ["ship"]);
+});
+
+test("规则层 FSM：支持自定义迁移校验与 Plan/Runtime 生命周期策略", () => {
+  const taskPolicy = createTaskLifecyclePolicy({
+    initialStatus: "drafting",
+    transitionTable: {
+      drafting: {
+        submit: "reviewing",
+      },
+      reviewing: {
+        approve: "done",
+      },
+      done: {},
+    },
+    terminalStatuses: ["done"],
+    defaultActionPriority: ["submit", "approve"],
+    validateTransition({ currentStatus, action }) {
+      if (currentStatus === "reviewing" && action === "approve") {
+        return createCoreError("STATE_CONFLICT", "自定义迁移校验拒绝当前动作", {
+          currentStatus,
+          action,
+        });
+      }
+
+      return undefined;
+    },
+  });
+  const planPolicy = createPlanLifecyclePolicy({
+    initialStatus: "outline",
+    transitionTable: {
+      outline: {
+        refine: "ready_for_review",
+      },
+      ready_for_review: {
+        publish: "released",
+      },
+      released: {},
+    },
+    terminalStatuses: ["released"],
+    defaultActionPriority: ["refine", "publish"],
+  });
+  const runtimePolicy = createRuntimeLifecyclePolicy({
+    initialStatus: "waiting_boot",
+    transitionTable: {
+      waiting_boot: {
+        boot: "live",
+      },
+      live: {
+        stop: "closed",
+      },
+      closed: {},
+    },
+    terminalStatuses: ["closed"],
+    defaultActionPriority: ["boot", "stop"],
+  });
+
+  const taskDenied = taskPolicy.transition("reviewing", "approve");
+  assert.equal(taskDenied.ok, false);
+  if (taskDenied.ok) {
+    assert.fail("自定义校验应拒绝 reviewing -> approve");
+  }
+  assert.equal(taskDenied.error.message, "自定义迁移校验拒绝当前动作");
+  assert.equal(planPolicy.selectDefaultAction("outline"), "refine");
+  assert.equal(runtimePolicy.selectDefaultAction("waiting_boot"), "boot");
+  assert.equal(planPolicy.isTerminal("released"), true);
+  assert.equal(runtimePolicy.isTerminal("closed"), true);
 });

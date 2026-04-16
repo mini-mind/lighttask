@@ -1,10 +1,6 @@
-import {
-  assertExpectedRevision,
-  assertNextRevision,
-  decideIdempotency,
-  selectDefaultTaskAction,
-  transitionTaskStatus,
-} from "../rules";
+import { bumpRevision } from "../data-structures";
+import { assertExpectedRevision, assertNextRevision, decideIdempotency } from "../rules";
+import { resolveTaskLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -35,6 +31,7 @@ export function advanceTaskUseCase(
   input: AdvanceTaskInput,
 ): LightTaskTask {
   const publishEvent = resolveNotifyPublisher(options);
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const getTask = requireLightTaskFunction(options.taskRepository?.get, "taskRepository.get");
   const saveIfRevisionMatches = requireLightTaskFunction(
     options.taskRepository?.saveIfRevisionMatches,
@@ -59,12 +56,21 @@ export function advanceTaskUseCase(
     );
   }
 
-  const action = input.action ?? selectDefaultTaskAction(task.status);
+  if (task.designStatus !== "ready") {
+    throwLightTaskError(
+      createLightTaskError("STATE_CONFLICT", "当前任务未处于 ready 设计态，不能推进执行状态", {
+        taskId: normalizedTaskId,
+        currentDesignStatus: task.designStatus,
+      }),
+    );
+  }
+
+  const action = input.action ?? taskLifecycle.selectDefaultAction(task.executionStatus);
   if (!action) {
     throwLightTaskError(
       createLightTaskError("STATE_CONFLICT", "任务没有可推进的进行中阶段", {
         taskId: normalizedTaskId,
-        currentStatus: task.status,
+        currentStatus: task.executionStatus,
       }),
     );
   }
@@ -90,20 +96,29 @@ export function advanceTaskUseCase(
     return toPublicTask(task);
   }
 
-  const nextRevision = task.revision + 1;
+  const nextRevision = bumpRevision(
+    {
+      revision: task.revision,
+      updatedAt: task.updatedAt ?? task.createdAt,
+      idempotencyKey: task.idempotencyKey,
+    },
+    options.clock?.now?.() ?? task.updatedAt ?? task.createdAt,
+    input.idempotencyKey?.trim() || task.idempotencyKey,
+  );
   assertExpectedRevision(task.revision, expectedRevision);
-  assertNextRevision(task.revision, nextRevision);
+  assertNextRevision(task.revision, nextRevision.revision);
 
-  const transition = transitionTaskStatus(task.status, action);
+  const transition = taskLifecycle.transition(task.executionStatus, action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }
 
-  task.status = transition.status;
-  task.revision = nextRevision;
-  task.idempotencyKey = input.idempotencyKey?.trim() || task.idempotencyKey;
+  task.executionStatus = transition.status;
+  task.revision = nextRevision.revision;
+  task.updatedAt = nextRevision.updatedAt;
+  task.idempotencyKey = nextRevision.idempotencyKey;
   task.lastAdvanceFingerprint = incomingFingerprint;
-  applyTaskStepProgress(task, action);
+  applyTaskStepProgress(task, action, taskLifecycle);
 
   const saved = saveIfRevisionMatches(task, storedTask.revision);
   if (!saved.ok) {

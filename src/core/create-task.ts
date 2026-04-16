@@ -1,23 +1,50 @@
+import { isTaskDesignStatus } from "../data-structures";
 import { cloneOptional } from "./clone";
+import { resolveTaskLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
 import { publishTaskCreatedEvent, resolveNotifyPublisher } from "./notify-event";
-import { createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
+import { createDefaultTaskSteps, resolveTaskDesignStatus, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
   CreateTaskInput,
   LightTaskTask,
   PersistedLightTask,
+  TaskDesignStatus,
 } from "./types";
+
+function resolveOptionalPlanId(planId: string | undefined): string | undefined {
+  const normalizedPlanId = planId?.trim();
+  return normalizedPlanId || undefined;
+}
+
+function assertTaskDesignStatus(designStatus: string | undefined): TaskDesignStatus | undefined {
+  const normalizedDesignStatus = designStatus?.trim();
+  if (!normalizedDesignStatus) {
+    return undefined;
+  }
+
+  if (!isTaskDesignStatus(normalizedDesignStatus)) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "designStatus 仅支持 draft 或 ready", {
+        designStatus,
+        supportedDesignStatuses: ["draft", "ready"],
+      }),
+    );
+  }
+
+  return normalizedDesignStatus;
+}
 
 export function createTaskUseCase(
   options: CreateLightTaskOptions,
   input: CreateTaskInput,
 ): LightTaskTask {
   const publishEvent = resolveNotifyPublisher(options);
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const nextTaskId = requireLightTaskFunction(
     options.idGenerator?.nextTaskId,
     "idGenerator.nextTaskId",
@@ -28,8 +55,11 @@ export function createTaskUseCase(
     "taskRepository.create",
   );
   const taskId = nextTaskId().trim();
+  const now = clockNow();
   const title = input.title.trim();
   const summary = input.summary?.trim() || undefined;
+  const planId = resolveOptionalPlanId(input.planId);
+  const designStatus = resolveTaskDesignStatus(assertTaskDesignStatus(input.designStatus));
 
   if (!taskId) {
     throwLightTaskError(
@@ -47,15 +77,26 @@ export function createTaskUseCase(
     );
   }
 
+  if (input.planId !== undefined && !planId) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "planId 不能为空", {
+        planId: input.planId,
+      }),
+    );
+  }
+
   const task: PersistedLightTask = {
     id: taskId,
+    planId,
     title,
     summary,
-    status: "queued",
+    designStatus,
+    executionStatus: taskLifecycle.initialStatus,
     revision: 1,
     idempotencyKey: undefined,
-    createdAt: clockNow(),
-    steps: createDefaultTaskSteps(taskId),
+    createdAt: now,
+    updatedAt: now,
+    steps: createDefaultTaskSteps(taskId, designStatus),
     metadata: cloneOptional(input.metadata),
     extensions: cloneOptional(input.extensions),
   };

@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { createCoreError } from "../data-structures";
 import type { DomainEvent } from "../data-structures";
+import type {
+  GraphSnapshot,
+  OutputRecord,
+  PlanSessionRecord,
+  RuntimeRecord,
+  StructuredEntityExtensions,
+  TaskDesignStatus,
+  TaskLifecycleStatus,
+} from "../data-structures";
+import type { ConsistencyPort } from "./port-consistency";
 import type { GraphRepository, GraphSnapshotScope } from "./port-graph-repo";
 import type { NotifyPort } from "./port-notify";
 import type { OutputRepository } from "./port-output-repo";
@@ -16,6 +26,32 @@ type KeyedRevisionRecord = {
 
 type RevisionRecord = {
   revision: number;
+};
+
+export type InMemoryTaskStage = "investigate" | "design" | "implement" | "verify" | "converge";
+
+export type InMemoryTaskStepStatus = "todo" | "doing" | "done";
+
+export type InMemoryTaskStepRecord = {
+  id: string;
+  title: string;
+  stage: InMemoryTaskStage;
+  status: InMemoryTaskStepStatus;
+};
+
+export type InMemoryTaskRecord = KeyedRevisionRecord & {
+  title: string;
+  summary?: string;
+  planId?: string;
+  designStatus?: TaskDesignStatus;
+  executionStatus: TaskLifecycleStatus;
+  createdAt: string;
+  updatedAt?: string;
+  idempotencyKey?: string;
+  steps: InMemoryTaskStepRecord[];
+  metadata?: Record<string, unknown>;
+  extensions?: StructuredEntityExtensions;
+  lastAdvanceFingerprint?: string;
 };
 
 const DEFAULT_GRAPH_SCOPE: GraphSnapshotScope = "draft";
@@ -370,6 +406,14 @@ export function createTaskIdGenerator(): IdGeneratorPort {
   };
 }
 
+export function createNoopConsistencyPort(): ConsistencyPort {
+  return {
+    run(_scope, work) {
+      return work();
+    },
+  };
+}
+
 export interface InMemoryNotifyCollector<TEvent extends DomainEvent = DomainEvent>
   extends NotifyPort<TEvent> {
   listPublished(): TEvent[];
@@ -391,5 +435,46 @@ export function createInMemoryNotifyCollector<
     clear() {
       publishedEvents.length = 0;
     },
+  };
+}
+
+export interface InMemoryLightTaskPortsOptions {
+  taskRepository?: TaskRepository<InMemoryTaskRecord>;
+  planRepository?: PlanRepository<PlanSessionRecord>;
+  graphRepository?: GraphRepository<GraphSnapshot>;
+  runtimeRepository?: RuntimeRepository<RuntimeRecord>;
+  outputRepository?: OutputRepository<OutputRecord>;
+  notify?: NotifyPort<DomainEvent>;
+  consistency?: ConsistencyPort;
+  clock?: ClockPort;
+  idGenerator?: IdGeneratorPort;
+}
+
+export interface InMemoryLightTaskPorts {
+  taskRepository: TaskRepository<InMemoryTaskRecord>;
+  planRepository: PlanRepository<PlanSessionRecord>;
+  graphRepository: GraphRepository<GraphSnapshot>;
+  runtimeRepository: RuntimeRepository<RuntimeRecord>;
+  outputRepository: OutputRepository<OutputRecord>;
+  notify: NotifyPort<DomainEvent>;
+  consistency: ConsistencyPort;
+  clock: ClockPort;
+  idGenerator: IdGeneratorPort;
+}
+
+export function createInMemoryLightTaskPorts(
+  overrides: InMemoryLightTaskPortsOptions = {},
+): InMemoryLightTaskPorts {
+  return {
+    taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<InMemoryTaskRecord>(),
+    planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PlanSessionRecord>(),
+    graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<GraphSnapshot>(),
+    runtimeRepository:
+      overrides.runtimeRepository ?? createInMemoryRuntimeRepository<RuntimeRecord>(),
+    outputRepository: overrides.outputRepository ?? createInMemoryOutputRepository<OutputRecord>(),
+    notify: overrides.notify ?? createInMemoryNotifyCollector(),
+    consistency: overrides.consistency ?? createNoopConsistencyPort(),
+    clock: overrides.clock ?? createSystemClock(),
+    idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),
   };
 }

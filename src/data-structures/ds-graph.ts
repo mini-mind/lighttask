@@ -7,6 +7,9 @@ export type DependencyKind = "depends_on" | "blocks" | "relates_to";
 
 export interface GraphNodeRecord {
   id: string;
+  /**
+   * 关系视图里的稳定 Task 引用；Graph 不再拥有独立于 Task 的执行真源语义。
+   */
   taskId: string;
   label: string;
   metadata?: Record<string, unknown>;

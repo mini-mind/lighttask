@@ -2,10 +2,10 @@
   "name": "lighttask",
   "version": "0.1.0",
   "description": "LightTask 通用人机协作编排内核",
-  "private": true,
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist", "!dist/tests/**", "CHANGELOG.md"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,13 +22,17 @@
     "./ports": {
       "types": "./dist/ports/index.d.ts",
       "default": "./dist/ports/index.js"
+    },
+    "./ports/in-memory": {
+      "types": "./dist/ports/in-memory.d.ts",
+      "default": "./dist/ports/in-memory.js"
     }
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/tests",
-    "test:api": "npm run build && node --test dist/tests/lighttask.task.flow.api.test.js dist/tests/lighttask.task.idempotency.api.test.js dist/tests/lighttask.task.error-boundary.api.test.js dist/tests/lighttask.output.api.test.js dist/tests/data-structures.test.js",
-    "test:cli": "npm run build && node --test dist/tests/cli.test.js",
+    "test": "npm run build && node --test ./dist/tests",
+    "test:api": "npm run build && node --test ./dist/tests/lighttask.task.flow.api.test.js ./dist/tests/lighttask.task.idempotency.api.test.js ./dist/tests/lighttask.task.error-boundary.api.test.js ./dist/tests/lighttask.output.api.test.js ./dist/tests/data-structures.test.js",
+    "test:cli": "npm run build && node --test ./dist/tests/cli.test.js",
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "arch:check": "node scripts/arch-check.mjs",
     "lint": "biome lint src scripts",

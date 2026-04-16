@@ -1,0 +1,1 @@
+# 交给 package.json files 白名单控制发布内容，不继承 .gitignore 对 dist 的排除。

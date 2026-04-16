@@ -1,16 +1,12 @@
-import {
-  createLightTaskError,
-  requireLightTaskFunction,
-  throwLightTaskError,
-} from "./lighttask-error";
-import { toPublicTask } from "./task-snapshot";
-import type { CreateLightTaskOptions, LightTaskTask } from "./types";
+import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
+import { listTasksUseCase } from "./list-tasks";
+import type { CreateLightTaskOptions, LightTaskTask, ListTasksInput } from "./types";
 
 export function listTasksByPlanUseCase(
   options: CreateLightTaskOptions,
   planId: string,
+  input: Omit<ListTasksInput, "planId"> = {},
 ): LightTaskTask[] {
-  const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
   const normalizedPlanId = planId.trim();
 
   if (!normalizedPlanId) {
@@ -21,7 +17,8 @@ export function listTasksByPlanUseCase(
     );
   }
 
-  return listTasks()
-    .filter((task) => task.planId === normalizedPlanId)
-    .map((task) => toPublicTask(task));
+  return listTasksUseCase(options, {
+    ...input,
+    planId: normalizedPlanId,
+  });
 }

@@ -11,13 +11,6 @@ const MATERIALIZED_TASK_KIND = "materialized_plan_task" as const;
 function readMaterializedTaskGovernance(
   governance: unknown,
 ): MaterializedPlanTaskGovernance | undefined {
-  // 兼容旧数据：治理块缺失时按 active 读取，后续由物化流程补成显式状态。
-  if (governance === undefined) {
-    return {
-      state: "active",
-    };
-  }
-
   if (typeof governance !== "object" || governance === null) {
     return undefined;
   }

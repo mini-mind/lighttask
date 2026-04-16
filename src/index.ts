@@ -6,6 +6,7 @@ export type {
   RuntimeOwnerRef,
   RuntimeParentRef,
   RuntimeRelatedRef,
+  TaskDesignStatus,
 } from "./data-structures";
 
 export type {
@@ -13,6 +14,7 @@ export type {
   AdvanceOutputInput,
   AdvanceRuntimeInput,
   AdvanceTaskInput,
+  CreateLightTaskOptions,
   CreateOutputInput,
   CreatePlanInput,
   CreateRuntimeInput,
@@ -22,6 +24,9 @@ export type {
   GetPlanSchedulingFactsResult,
   LaunchPlanInput,
   LaunchPlanResult,
+  ListOutputsInput,
+  ListRuntimesInput,
+  ListTasksInput,
   LightTaskDomainEvent,
   LightTaskDomainEventType,
   LightTaskGraph,
@@ -31,6 +36,7 @@ export type {
   LightTaskOutputItemInput,
   LightTaskOutputItemStatus,
   MaterializeRemovedNodePolicy,
+  MaterializedTaskSourceQuery,
   MaterializePlanTasksInput,
   MaterializePlanTasksResult,
   MaterializedPlanTaskGovernance,
@@ -48,6 +54,10 @@ export type {
   PublishGraphInput,
   SaveGraphInput,
   StepStatus,
+  TaskExecutionStatus,
+  TaskDesignStatusQuery,
   TaskStage,
+  TaskUpdatedEvent,
+  UpdateTaskInput,
   UpdatePlanInput,
 } from "./core/types";

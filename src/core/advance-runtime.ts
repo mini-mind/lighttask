@@ -1,11 +1,7 @@
 import { bumpRevision } from "../data-structures";
-import {
-  assertExpectedRevision,
-  assertNextRevision,
-  selectDefaultRuntimeAction,
-  transitionRuntimeStatus,
-} from "../rules";
+import { assertExpectedRevision, assertNextRevision } from "../rules";
 import { cloneOptional } from "./clone";
+import { resolveRuntimeLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -65,6 +61,7 @@ export function advanceRuntimeUseCase(
   input: AdvanceRuntimeInput,
 ): LightTaskRuntime {
   const publishEvent = resolveNotifyPublisher(options);
+  const runtimeLifecycle = resolveRuntimeLifecyclePolicy(options);
   const getRuntime = requireLightTaskFunction(
     options.runtimeRepository?.get,
     "runtimeRepository.get",
@@ -96,7 +93,7 @@ export function advanceRuntimeUseCase(
   assertNoRelationshipMutation(normalizedRuntimeId, input);
 
   const runtime = clonePersistedRuntime(storedRuntime);
-  const action = input.action ?? selectDefaultRuntimeAction(runtime.status);
+  const action = input.action ?? runtimeLifecycle.selectDefaultAction(runtime.status);
 
   if (!action) {
     throwLightTaskError(
@@ -110,7 +107,7 @@ export function advanceRuntimeUseCase(
   assertExpectedRevision(runtime.revision, input.expectedRevision);
   assertNextRevision(runtime.revision, runtime.revision + 1);
 
-  const transition = transitionRuntimeStatus(runtime.status, action);
+  const transition = runtimeLifecycle.transition(runtime.status, action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }

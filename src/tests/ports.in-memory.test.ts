@@ -29,7 +29,7 @@ type TaskRecordFixture = {
   id: string;
   title: string;
   summary: string;
-  status: string;
+  executionStatus: string;
   revision: number;
   createdAt: string;
   steps: TaskStepFixture[];
@@ -45,7 +45,7 @@ function createPersistedTask(taskId: string, revision = 1): TaskRecordFixture {
     id: taskId,
     title: `任务 ${taskId}`,
     summary: `摘要 ${taskId}`,
-    status: "queued",
+    executionStatus: "queued",
     revision,
     createdAt: "2026-04-14T00:00:00.000Z",
     steps: [
@@ -283,7 +283,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 在 revision 冲突时返
   }
 
   const next = createPersistedTask("task_revision", 2);
-  next.status = "dispatched";
+  next.executionStatus = "dispatched";
   next.steps[0].status = "done";
   next.steps[1].status = "doing";
 
@@ -307,7 +307,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 在 revision 匹配时成
   }
 
   const next = createPersistedTask("task_save", 2);
-  next.status = "dispatched";
+  next.executionStatus = "dispatched";
   next.steps[0].status = "done";
   next.steps[1].status = "doing";
 
@@ -316,13 +316,13 @@ test("端口层 in-memory：task saveIfRevisionMatches 在 revision 匹配时成
   if (!saved.ok) {
     assert.fail("revision 匹配时必须成功");
   }
-  assert.equal(saved.task.status, "dispatched");
+  assert.equal(saved.task.executionStatus, "dispatched");
   assert.equal(saved.task.steps[0].status, "done");
   assert.equal(saved.task.steps[1].status, "doing");
 
   const fetched = repository.get("task_save");
   assert.ok(fetched);
-  assert.equal(fetched.status, "dispatched");
+  assert.equal(fetched.executionStatus, "dispatched");
   assert.equal(fetched.revision, 2);
   assert.equal(fetched.steps[0].status, "done");
   assert.equal(fetched.steps[1].status, "doing");
@@ -337,7 +337,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 成功返回值与内部�
   }
 
   const next = createPersistedTask("task_save_snapshot", 2);
-  next.status = "dispatched";
+  next.executionStatus = "dispatched";
   next.steps[0].status = "done";
   next.steps[1].status = "doing";
 
@@ -365,7 +365,7 @@ test("端口层 in-memory：task saveIfRevisionMatches 后外部篡改原入参�
   }
 
   const next = createPersistedTask("task_input_save", 2);
-  next.status = "dispatched";
+  next.executionStatus = "dispatched";
   next.steps[0].status = "done";
 
   const saved = repository.saveIfRevisionMatches(next, 1);

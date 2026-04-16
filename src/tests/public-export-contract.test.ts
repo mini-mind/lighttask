@@ -17,6 +17,7 @@ test("公共导出契约：package.json exports 映射保持稳定", () => {
     "./data-structures",
     "./rules",
     "./ports",
+    "./ports/in-memory",
   ]);
 
   assert.deepEqual(packageJson.exports["."], {
@@ -34,6 +35,10 @@ test("公共导出契约：package.json exports 映射保持稳定", () => {
   assert.deepEqual(packageJson.exports["./ports"], {
     types: "./dist/ports/index.d.ts",
     default: "./dist/ports/index.js",
+  });
+  assert.deepEqual(packageJson.exports["./ports/in-memory"], {
+    types: "./dist/ports/in-memory.d.ts",
+    default: "./dist/ports/in-memory.js",
   });
 });
 
@@ -103,4 +108,72 @@ test("公共导出契约：ports 子入口保持 type-only runtime 语义", () =
     path.join(PACKAGE_ROOT, "dist/ports/index.js"),
   );
   assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "dist/ports/index.d.ts")), true);
+});
+
+test("公共导出契约：ports/in-memory 子入口暴露可用的内存适配器", () => {
+  const portsExports = requireFromPackage("lighttask/ports/in-memory") as Record<string, unknown>;
+
+  assert.equal(typeof portsExports.createInMemoryLightTaskPorts, "function");
+  assert.equal(typeof portsExports.createInMemoryTaskRepository, "function");
+  assert.equal(typeof portsExports.createInMemoryPlanRepository, "function");
+  assert.equal(typeof portsExports.createInMemoryGraphRepository, "function");
+  assert.equal(typeof portsExports.createInMemoryRuntimeRepository, "function");
+  assert.equal(typeof portsExports.createInMemoryOutputRepository, "function");
+  assert.equal(typeof portsExports.createInMemoryNotifyCollector, "function");
+  assert.equal(typeof portsExports.createNoopConsistencyPort, "function");
+  assert.equal(typeof portsExports.createSystemClock, "function");
+  assert.equal(typeof portsExports.createTaskIdGenerator, "function");
+  assert.equal(
+    requireFromPackage.resolve("lighttask/ports/in-memory"),
+    path.join(PACKAGE_ROOT, "dist/ports/in-memory.js"),
+  );
+  assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "dist/ports/in-memory.d.ts")), true);
+});
+
+test("公共导出契约：README 和接入指南里的最小启动路径可直接工作", () => {
+  const rootExports = requireFromPackage("lighttask") as Record<string, unknown>;
+  const portsExports = requireFromPackage("lighttask/ports/in-memory") as Record<string, unknown>;
+  const createLightTask = rootExports.createLightTask as (options: unknown) => {
+    createPlan(input: { id: string; title: string }): unknown;
+    createTask(input: { title: string; planId: string }): { id: string };
+    saveGraph(
+      planId: string,
+      input: {
+        nodes: { id: string; taskId: string; label: string }[];
+        edges: [];
+      },
+    ): unknown;
+    publishGraph(planId: string, input: { expectedRevision: number }): unknown;
+    getPlanSchedulingFacts(
+      planId: string,
+      input: { expectedPublishedGraphRevision: number },
+    ): { runnableNodeIds: string[] };
+  };
+  const createInMemoryLightTaskPorts = portsExports.createInMemoryLightTaskPorts as () => unknown;
+
+  assert.equal(typeof createLightTask, "function");
+  assert.equal(typeof createInMemoryLightTaskPorts, "function");
+
+  const lighttask = createLightTask(createInMemoryLightTaskPorts());
+
+  lighttask.createPlan({
+    id: "plan_public_exports_smoke",
+    title: "public exports smoke",
+  });
+  const task = lighttask.createTask({
+    title: "任务 A",
+    planId: "plan_public_exports_smoke",
+  });
+  lighttask.saveGraph("plan_public_exports_smoke", {
+    nodes: [{ id: "node_a", taskId: task.id, label: "任务 A" }],
+    edges: [],
+  });
+  lighttask.publishGraph("plan_public_exports_smoke", { expectedRevision: 1 });
+
+  assert.deepEqual(
+    lighttask.getPlanSchedulingFacts("plan_public_exports_smoke", {
+      expectedPublishedGraphRevision: 1,
+    }).runnableNodeIds,
+    ["node_a"],
+  );
 });

@@ -1,43 +1,41 @@
-export type TaskLifecycleStatus =
-  | "queued"
-  | "dispatched"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "blocked_by_approval";
+export type TaskLifecycleStatus = string;
 
-export type PlanLifecycleStatus =
-  | "draft"
-  | "planning"
-  | "ready"
-  | "confirmed"
-  | "archived"
-  | "failed";
+export const TASK_DESIGN_STATUSES = ["draft", "ready"] as const;
 
-export type RuntimeLifecycleStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type TaskDesignStatus = (typeof TASK_DESIGN_STATUSES)[number];
 
-const TASK_TERMINAL_STATUS: ReadonlySet<TaskLifecycleStatus> = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
+export type PlanLifecycleStatus = string;
 
-const PLAN_TERMINAL_STATUS: ReadonlySet<PlanLifecycleStatus> = new Set(["archived", "failed"]);
-const RUNTIME_TERMINAL_STATUS: ReadonlySet<RuntimeLifecycleStatus> = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
+export type RuntimeLifecycleStatus = string;
+
+export const DEFAULT_TASK_TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const;
+export const DEFAULT_PLAN_TERMINAL_STATUSES = ["archived", "failed"] as const;
+export const DEFAULT_RUNTIME_TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const;
+
+function createTerminalStatusChecker(statuses: readonly string[]): (status: string) => boolean {
+  const terminalStatuses = new Set(statuses);
+  return (status) => terminalStatuses.has(status);
+}
+
+const isDefaultTaskTerminalStatus = createTerminalStatusChecker(DEFAULT_TASK_TERMINAL_STATUSES);
+const isDefaultPlanTerminalStatus = createTerminalStatusChecker(DEFAULT_PLAN_TERMINAL_STATUSES);
+const isDefaultRuntimeTerminalStatus = createTerminalStatusChecker(
+  DEFAULT_RUNTIME_TERMINAL_STATUSES,
+);
+const taskDesignStatuses = new Set<string>(TASK_DESIGN_STATUSES);
+
+export function isTaskDesignStatus(status: string): status is TaskDesignStatus {
+  return taskDesignStatuses.has(status);
+}
 
 export function isTaskTerminalStatus(status: TaskLifecycleStatus): boolean {
-  return TASK_TERMINAL_STATUS.has(status);
+  return isDefaultTaskTerminalStatus(status);
 }
 
 export function isPlanTerminalStatus(status: PlanLifecycleStatus): boolean {
-  return PLAN_TERMINAL_STATUS.has(status);
+  return isDefaultPlanTerminalStatus(status);
 }
 
 export function isRuntimeTerminalStatus(status: RuntimeLifecycleStatus): boolean {
-  return RUNTIME_TERMINAL_STATUS.has(status);
+  return isDefaultRuntimeTerminalStatus(status);
 }

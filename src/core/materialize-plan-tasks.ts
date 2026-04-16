@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { topologicalSort } from "../rules";
 import { cloneOptional } from "./clone";
+import { runInConsistencyBoundary } from "./consistency-boundary";
 import { toPublicGraph } from "./graph-snapshot";
 import {
   createLightTaskError,
@@ -13,39 +14,19 @@ import {
   createOrphanedMaterializedTaskProvenance,
   readMaterializedTaskProvenance,
 } from "./materialized-task-governance";
-import { publishPlanTasksMaterializedEvent, resolveNotifyPublisher } from "./notify-event";
+import { publishPlanTaskProvenanceSyncedEvent, resolveNotifyPublisher } from "./notify-event";
 import { toPublicPlan } from "./plan-snapshot";
-import { clonePersistedTask, createDefaultTaskSteps, toPublicTask } from "./task-snapshot";
+import { clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
   MaterializePlanTasksInput,
   MaterializePlanTasksResult,
   MaterializeRemovedNodePolicy,
-  MaterializedPlanTaskProvenance,
   PersistedLightTask,
 } from "./types";
 
 const PUBLISHED_GRAPH_SCOPE = "published" as const;
-const DEFAULT_REMOVED_NODE_POLICY = "keep" as const;
-const MATERIALIZED_TASK_SYNC_BOUNDARY = {
-  // 这些字段由已发布图定义，重复物化时允许被结构性覆盖。
-  syncable: ["planId", "title", "summary", "metadata", "extensions"] as const,
-  // 这些字段属于任务实例自身，物化不应改写。
-  protected: [
-    "id",
-    "status",
-    "steps",
-    "createdAt",
-    "revision",
-    "idempotencyKey",
-    "lastAdvanceFingerprint",
-  ] as const,
-} as const;
-
-type MaterializedTaskSyncableFields = Pick<
-  PersistedLightTask,
-  (typeof MATERIALIZED_TASK_SYNC_BOUNDARY.syncable)[number]
->;
+const DEFAULT_REMOVED_NODE_POLICY = "soft_delete" as const;
 
 function assertPlanId(planId: string): string {
   const normalizedPlanId = planId.trim();
@@ -94,11 +75,11 @@ function assertExpectedPublishedGraphRevision(
 function resolveRemovedNodePolicy(input: MaterializePlanTasksInput): MaterializeRemovedNodePolicy {
   const removedNodePolicy = input.removedNodePolicy ?? DEFAULT_REMOVED_NODE_POLICY;
 
-  if (removedNodePolicy !== DEFAULT_REMOVED_NODE_POLICY) {
+  if (removedNodePolicy !== DEFAULT_REMOVED_NODE_POLICY && removedNodePolicy !== "keep") {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "removedNodePolicy 仅支持 keep", {
+      createLightTaskError("VALIDATION_ERROR", "removedNodePolicy 仅支持 soft_delete 或 keep", {
         removedNodePolicy,
-        supportedRemovedNodePolicies: [DEFAULT_REMOVED_NODE_POLICY],
+        supportedRemovedNodePolicies: [DEFAULT_REMOVED_NODE_POLICY, "keep"],
       }),
     );
   }
@@ -108,7 +89,7 @@ function resolveRemovedNodePolicy(input: MaterializePlanTasksInput): Materialize
 
 function buildMaterializedTaskExtensions(
   extensions: PersistedLightTask["extensions"],
-  provenance: MaterializedPlanTaskProvenance,
+  provenance: ReturnType<typeof createActiveMaterializedTaskProvenance>,
 ): PersistedLightTask["extensions"] {
   const nextExtensions = cloneOptional(extensions) ?? {};
   const nextNamespaces = cloneOptional(nextExtensions.namespaces) ?? {};
@@ -129,11 +110,12 @@ function mapMaterializedTasksByNodeId(
   const tasksByNodeId = new Map<string, PersistedLightTask>();
 
   for (const task of tasks) {
-    if (task.planId !== planId) {
+    const normalizedTask = clonePersistedTask(task);
+    if (normalizedTask.planId !== planId) {
       continue;
     }
 
-    const provenance = readMaterializedTaskProvenance(task);
+    const provenance = readMaterializedTaskProvenance(normalizedTask);
     if (!provenance) {
       continue;
     }
@@ -144,55 +126,57 @@ function mapMaterializedTasksByNodeId(
         createLightTaskError("STATE_CONFLICT", "检测到重复的计划任务物化 provenance", {
           planId,
           nodeId: provenance.source.nodeId,
-          taskIds: [existed.id, task.id],
+          taskIds: [existed.id, normalizedTask.id],
         }),
       );
     }
 
-    tasksByNodeId.set(provenance.source.nodeId, task);
+    tasksByNodeId.set(provenance.source.nodeId, normalizedTask);
   }
 
   return tasksByNodeId;
 }
 
-function assertNodeTitle(planId: string, nodeId: string, label: string): string {
-  const normalizedTitle = label.trim();
+function mapPlanTasksByNodeId(
+  tasks: PersistedLightTask[],
+  planId: string,
+  nodes: ReadonlyArray<{ id: string; taskId: string }>,
+): Map<string, PersistedLightTask> {
+  const tasksByNodeId = new Map<string, PersistedLightTask>();
+  const directTasksById = new Map<string, PersistedLightTask>();
 
-  if (!normalizedTitle) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "已发布图节点标签不能为空，无法物化计划任务", {
-        planId,
-        nodeId,
-        label,
-      }),
-    );
+  for (const task of tasks) {
+    const normalizedTask = clonePersistedTask(task);
+    directTasksById.set(normalizedTask.id, normalizedTask);
   }
 
-  return normalizedTitle;
+  for (const node of nodes) {
+    const directTask = directTasksById.get(node.taskId);
+    if (!directTask) {
+      continue;
+    }
+
+    if (directTask.planId !== planId) {
+      throwLightTaskError(
+        createLightTaskError("STATE_CONFLICT", "图节点引用的任务未归属当前计划", {
+          planId,
+          nodeId: node.id,
+          taskId: directTask.id,
+          taskPlanId: directTask.planId,
+        }),
+      );
+    }
+    tasksByNodeId.set(node.id, directTask);
+  }
+
+  return tasksByNodeId;
 }
 
 function hasStructuralChanges(
   task: PersistedLightTask,
-  nextTaskFields: MaterializedTaskSyncableFields,
+  nextExtensions: PersistedLightTask["extensions"],
 ): boolean {
-  return (
-    task.planId !== nextTaskFields.planId ||
-    task.title !== nextTaskFields.title ||
-    task.summary !== nextTaskFields.summary ||
-    !isDeepStrictEqual(task.metadata, nextTaskFields.metadata) ||
-    !isDeepStrictEqual(task.extensions, nextTaskFields.extensions)
-  );
-}
-
-function applyMaterializedTaskSyncableFields(
-  task: PersistedLightTask,
-  nextTaskFields: MaterializedTaskSyncableFields,
-): void {
-  task.planId = nextTaskFields.planId;
-  task.title = nextTaskFields.title;
-  task.summary = nextTaskFields.summary;
-  task.metadata = nextTaskFields.metadata;
-  task.extensions = nextTaskFields.extensions;
+  return !isDeepStrictEqual(task.extensions, nextExtensions);
 }
 
 function finalizeMaterializedTasksResult(
@@ -200,9 +184,10 @@ function finalizeMaterializedTasksResult(
   removedNodePolicy: MaterializeRemovedNodePolicy,
 ): MaterializePlanTasksResult["tasks"] {
   switch (removedNodePolicy) {
+    case "soft_delete":
     case "keep":
-      // keep 策略下，返回结果只包含当前图上的 active 任务；
-      // 已移除节点对应旧任务继续保留，但会被显式标记为 orphaned。
+      // 两种策略都只返回当前图上的 active 任务；
+      // soft_delete 会额外把已移除节点任务标记为 orphaned，由查询层决定是否默认隐藏。
       return tasks;
   }
 }
@@ -213,6 +198,7 @@ function markRemovedMaterializedTasksAsOrphaned(input: {
   publishedNodeIds: ReadonlySet<string>;
   publishedGraphRevision: number;
 }): void {
+  const clockNow = requireLightTaskFunction(input.options.clock?.now, "clock.now");
   const saveIfRevisionMatches = requireLightTaskFunction(
     input.options.taskRepository?.saveIfRevisionMatches,
     "taskRepository.saveIfRevisionMatches",
@@ -238,6 +224,7 @@ function markRemovedMaterializedTasksAsOrphaned(input: {
 
     const nextTask = clonePersistedTask(task);
     nextTask.extensions = nextExtensions;
+    nextTask.updatedAt = clockNow();
     nextTask.revision = task.revision + 1;
 
     const saved = saveIfRevisionMatches(nextTask, task.revision);
@@ -285,99 +272,73 @@ export function materializePlanTasksUseCase(
   const nodesById = new Map(publishedGraph.nodes.map((node) => [node.id, node]));
   const publishedNodeIds = new Set(publishedGraph.nodes.map((node) => node.id));
   const orderedNodeIds = topologicalSort(publishedGraph);
-  const tasksByNodeId = mapMaterializedTasksByNodeId(listTasks(), normalizedPlanId);
-  const materializedTasks: MaterializePlanTasksResult["tasks"] = [];
-
-  for (const nodeId of orderedNodeIds) {
-    const node = nodesById.get(nodeId);
-    if (!node) {
-      continue;
-    }
-
-    const nextTaskFields = {
-      planId: normalizedPlanId,
-      title: assertNodeTitle(normalizedPlanId, node.id, node.label),
-      // 当前切片只从图节点映射稳定结构，不补充应用层摘要语义。
-      summary: undefined,
-      metadata: cloneOptional(node.metadata),
-      extensions: buildMaterializedTaskExtensions(
-        node.extensions,
-        createActiveMaterializedTaskProvenance(publishedGraph.revision, node.id, node.taskId),
-      ),
-    } satisfies MaterializedTaskSyncableFields;
-    const existedTask = tasksByNodeId.get(node.id);
-
-    if (!existedTask) {
-      const nextTaskId = requireLightTaskFunction(
-        options.idGenerator?.nextTaskId,
-        "idGenerator.nextTaskId",
-      );
-      const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
-      const createTask = requireLightTaskFunction(
-        options.taskRepository?.create,
-        "taskRepository.create",
-      );
-      const taskId = nextTaskId().trim();
-
-      if (!taskId) {
-        throwLightTaskError(
-          createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", {
-            planId: normalizedPlanId,
-            nodeId: node.id,
-            taskId,
-          }),
-        );
-      }
-
-      const created = createTask({
-        id: taskId,
-        planId: normalizedPlanId,
-        title: nextTaskFields.title,
-        summary: nextTaskFields.summary,
-        status: "queued",
-        revision: 1,
-        idempotencyKey: undefined,
-        createdAt: clockNow(),
-        steps: createDefaultTaskSteps(taskId),
-        metadata: nextTaskFields.metadata,
-        extensions: nextTaskFields.extensions,
-      });
-
-      if (!created.ok) {
-        throwLightTaskError(created.error);
-      }
-
-      materializedTasks.push(toPublicTask(created.task));
-      continue;
-    }
-
-    if (!hasStructuralChanges(existedTask, nextTaskFields)) {
-      materializedTasks.push(toPublicTask(existedTask));
-      continue;
-    }
-
-    const saveIfRevisionMatches = requireLightTaskFunction(
-      options.taskRepository?.saveIfRevisionMatches,
-      "taskRepository.saveIfRevisionMatches",
-    );
-    const nextTask = clonePersistedTask(existedTask);
-    applyMaterializedTaskSyncableFields(nextTask, nextTaskFields);
-    nextTask.revision = existedTask.revision + 1;
-
-    const saved = saveIfRevisionMatches(nextTask, existedTask.revision);
-    if (!saved.ok) {
-      throwLightTaskError(saved.error);
-    }
-
-    materializedTasks.push(toPublicTask(saved.task));
-  }
-
-  markRemovedMaterializedTasksAsOrphaned({
+  const listedTasks = listTasks();
+  const materializedTasksByNodeId = mapMaterializedTasksByNodeId(listedTasks, normalizedPlanId);
+  const tasksByNodeId = mapPlanTasksByNodeId(listedTasks, normalizedPlanId, publishedGraph.nodes);
+  const materializedTasks = runInConsistencyBoundary(
     options,
-    tasksByNodeId,
-    publishedNodeIds,
-    publishedGraphRevision: publishedGraph.revision,
-  });
+    `materializePlanTasks:${normalizedPlanId}`,
+    () => {
+      const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+      const saveIfRevisionMatches = requireLightTaskFunction(
+        options.taskRepository?.saveIfRevisionMatches,
+        "taskRepository.saveIfRevisionMatches",
+      );
+      const materializedTasks: MaterializePlanTasksResult["tasks"] = [];
+
+      for (const nodeId of orderedNodeIds) {
+        const node = nodesById.get(nodeId);
+        if (!node) {
+          continue;
+        }
+
+        const existedTask = tasksByNodeId.get(node.id);
+        if (!existedTask) {
+          throwLightTaskError(
+            createLightTaskError("NOT_FOUND", "图节点引用的任务不存在，无法同步计划任务", {
+              planId: normalizedPlanId,
+              nodeId: node.id,
+              taskId: node.taskId,
+            }),
+          );
+        }
+
+        const nextExtensions = buildMaterializedTaskExtensions(
+          cloneOptional(existedTask.extensions),
+          createActiveMaterializedTaskProvenance(publishedGraph.revision, node.id, node.taskId),
+        );
+
+        if (!hasStructuralChanges(existedTask, nextExtensions)) {
+          materializedTasks.push(toPublicTask(existedTask));
+          continue;
+        }
+
+        const nextTask = clonePersistedTask(existedTask);
+        // Task-first 下，同步只补充关系快照 provenance，不再允许 Graph 回写任务设计字段。
+        nextTask.extensions = nextExtensions;
+        nextTask.updatedAt = clockNow();
+        nextTask.revision = existedTask.revision + 1;
+
+        const saved = saveIfRevisionMatches(nextTask, existedTask.revision);
+        if (!saved.ok) {
+          throwLightTaskError(saved.error);
+        }
+
+        materializedTasks.push(toPublicTask(saved.task));
+      }
+
+      if (removedNodePolicy === "soft_delete") {
+        markRemovedMaterializedTasksAsOrphaned({
+          options,
+          tasksByNodeId: materializedTasksByNodeId,
+          publishedNodeIds,
+          publishedGraphRevision: publishedGraph.revision,
+        });
+      }
+
+      return materializedTasks;
+    },
+  );
 
   const result = {
     plan: toPublicPlan(storedPlan),
@@ -385,6 +346,6 @@ export function materializePlanTasksUseCase(
     tasks: finalizeMaterializedTasksResult(materializedTasks, removedNodePolicy),
   };
 
-  publishPlanTasksMaterializedEvent(publishEvent, result);
+  publishPlanTaskProvenanceSyncedEvent(publishEvent, result);
   return result;
 }
