@@ -5,9 +5,4 @@ export type { RuntimeRepository, RuntimeRepositoryWriteResult } from "./port-run
 export type { OutputRepository, OutputRepositoryWriteResult } from "./port-output-repo";
 export type { NotifyPort } from "./port-notify";
 export type { ConsistencyPort } from "./port-consistency";
-export type {
-  GraphRepository,
-  GraphRepositoryWriteResult,
-  GraphSnapshotScope,
-} from "./port-graph-repo";
 export type { ClockPort, IdGeneratorPort } from "./port-system";

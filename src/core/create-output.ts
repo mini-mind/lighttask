@@ -22,13 +22,9 @@ function normalizeOutputRuntimeRef(
   }
 
   const id = typeof runtimeRef.id === "string" ? runtimeRef.id.trim() : "";
-
-  // Output 首切片只保存运行时关系引用，不在这里引入跨仓储查验。
   if (!id) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 runtimeRef.id 不能为空", {
-        runtimeRef,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "输出 runtimeRef.id 不能为空", { runtimeRef }),
     );
   }
 
@@ -47,20 +43,9 @@ function normalizeOutputOwnerRef(
 
   const kind = typeof ownerRef.kind === "string" ? ownerRef.kind.trim() : "";
   const id = typeof ownerRef.id === "string" ? ownerRef.id.trim() : "";
-
-  if (!kind) {
+  if (!kind || !id) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 ownerRef.kind 不能为空", {
-        ownerRef,
-      }),
-    );
-  }
-
-  if (!id) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 ownerRef.id 不能为空", {
-        ownerRef,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "输出 ownerRef 必须包含非空 kind/id", { ownerRef }),
     );
   }
 
@@ -77,43 +62,69 @@ export function createOutputUseCase(
 ): LightTaskOutput {
   const publishEvent = resolveNotifyPublisher(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const getOutput = requireLightTaskFunction(options.outputRepository?.get, "outputRepository.get");
   const createOutput = requireLightTaskFunction(
     options.outputRepository?.create,
     "outputRepository.create",
   );
   const outputId = input.id.trim();
   const kind = input.kind.trim();
-
   if (!outputId) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 ID 不能为空", {
-        outputId: input.id,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "输出 ID 不能为空", { outputId: input.id }),
     );
   }
-
   if (!kind) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 kind 不能为空", {
-        kind: input.kind,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "输出 kind 不能为空", { kind: input.kind }),
     );
   }
 
-  const output: PersistedLightOutput = createOutputRecord({
+  const fingerprint = JSON.stringify({
     id: outputId,
     kind,
-    createdAt: clockNow(),
-    runtimeRef: normalizeOutputRuntimeRef(input.runtimeRef),
-    ownerRef: normalizeOutputOwnerRef(input.ownerRef),
+    runtimeRef: input.runtimeRef,
+    ownerRef: input.ownerRef,
     payload: input.payload,
-    items: normalizeOutputItems(input.items),
+    items: input.items,
     metadata: input.metadata,
     extensions: input.extensions,
-    idempotencyKey: input.idempotencyKey,
   });
-  const created = createOutput(output);
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const existed = getOutput(outputId);
+  if (existed && normalizedIdempotencyKey && existed.idempotencyKey === normalizedIdempotencyKey) {
+    if (existed.lastCreateFingerprint === fingerprint) {
+      return toPublicOutput(existed);
+    }
+    throwLightTaskError(
+      createLightTaskError(
+        "STATE_CONFLICT",
+        "相同 idempotencyKey 对应的请求内容不一致，拒绝处理。",
+        {
+          idempotencyKey: normalizedIdempotencyKey,
+          incomingFingerprint: fingerprint,
+          storedFingerprint: existed.lastCreateFingerprint,
+        },
+      ),
+    );
+  }
 
+  const output: PersistedLightOutput = {
+    ...createOutputRecord({
+      id: outputId,
+      kind,
+      createdAt: clockNow(),
+      runtimeRef: normalizeOutputRuntimeRef(input.runtimeRef),
+      ownerRef: normalizeOutputOwnerRef(input.ownerRef),
+      payload: input.payload,
+      items: normalizeOutputItems(input.items),
+      metadata: input.metadata,
+      extensions: input.extensions,
+      idempotencyKey: normalizedIdempotencyKey,
+    }),
+    lastCreateFingerprint: fingerprint,
+  };
+  const created = createOutput(output);
   if (!created.ok) {
     throwLightTaskError(created.error);
   }

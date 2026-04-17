@@ -1,10 +1,9 @@
 import { createLightTaskError } from "../core/lighttask-error";
-import type { PersistedLightTask } from "../core/types";
 import { LightTaskError, createLightTask } from "../index";
 import {
-  createInMemoryGraphRepository,
   createInMemoryPlanRepository,
   createInMemoryTaskRepository,
+  createNoopConsistencyPort,
   createSystemClock,
   createTaskIdGenerator,
 } from "../ports/in-memory";
@@ -16,12 +15,21 @@ function printHelp(): void {
   console.log('  npm run dev:cli -- create "任务标题"');
 }
 
+function ensurePlan(lighttask: ReturnType<typeof createLightTask>, planId: string): void {
+  if (!lighttask.getPlan(planId)) {
+    lighttask.createPlan({
+      id: planId,
+      title: "CLI 默认计划",
+    });
+  }
+}
+
 function run(): void {
   const [, , command, ...rest] = process.argv;
   const lighttask = createLightTask({
-    taskRepository: createInMemoryTaskRepository<PersistedLightTask>(),
+    taskRepository: createInMemoryTaskRepository(),
     planRepository: createInMemoryPlanRepository(),
-    graphRepository: createInMemoryGraphRepository(),
+    consistency: createNoopConsistencyPort(),
     clock: createSystemClock(),
     idGenerator: createTaskIdGenerator(),
   });
@@ -32,14 +40,21 @@ function run(): void {
   }
 
   if (command === "demo") {
+    ensurePlan(lighttask, "plan_cli_demo");
     const task = lighttask.createTask({
+      planId: "plan_cli_demo",
       title: "演示：收敛 LightTask 通用内核",
       summary: "通过 CLI 冒烟验证公共 API",
     });
-    lighttask.advanceTask(task.id, {
+    const finalized = lighttask.advanceTask(task.id, {
+      action: "finalize",
       expectedRevision: task.revision,
     });
-    console.log(JSON.stringify(lighttask.getTask(task.id), null, 2));
+    const dispatched = lighttask.advanceTask(task.id, {
+      action: "dispatch",
+      expectedRevision: finalized.revision,
+    });
+    console.log(JSON.stringify(lighttask.getTask(dispatched.id), null, 2));
     return;
   }
 
@@ -49,7 +64,17 @@ function run(): void {
       throw new LightTaskError(createLightTaskError("VALIDATION_ERROR", "create 命令需要任务标题"));
     }
 
-    console.log(JSON.stringify(lighttask.createTask({ title }), null, 2));
+    ensurePlan(lighttask, "plan_cli_default");
+    console.log(
+      JSON.stringify(
+        lighttask.createTask({
+          planId: "plan_cli_default",
+          title,
+        }),
+        null,
+        2,
+      ),
+    );
     return;
   }
 

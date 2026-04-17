@@ -1,42 +1,30 @@
-import { isTaskDesignStatus } from "../data-structures";
-import { cloneOptional } from "./clone";
-import { resolveTaskLifecyclePolicy } from "./lifecycle-policy";
+import { createTaskRecord } from "../data-structures";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
 import { publishTaskCreatedEvent, resolveNotifyPublisher } from "./notify-event";
-import { createDefaultTaskSteps, resolveTaskDesignStatus, toPublicTask } from "./task-snapshot";
+import { assertTaskDependencies, normalizeDependsOnTaskIds } from "./task-dependency-snapshot";
+import { normalizeDefinitionSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
   CreateTaskInput,
   LightTaskTask,
   PersistedLightTask,
-  TaskDesignStatus,
 } from "./types";
 
-function resolveOptionalPlanId(planId: string | undefined): string | undefined {
-  const normalizedPlanId = planId?.trim();
-  return normalizedPlanId || undefined;
-}
-
-function assertTaskDesignStatus(designStatus: string | undefined): TaskDesignStatus | undefined {
-  const normalizedDesignStatus = designStatus?.trim();
-  if (!normalizedDesignStatus) {
-    return undefined;
-  }
-
-  if (!isTaskDesignStatus(normalizedDesignStatus)) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "designStatus 仅支持 draft 或 ready", {
-        designStatus,
-        supportedDesignStatuses: ["draft", "ready"],
-      }),
-    );
-  }
-
-  return normalizedDesignStatus;
+function buildCreateTaskFingerprint(input: {
+  planId: string;
+  title: string;
+  status?: "draft";
+  summary?: string;
+  dependsOnTaskIds: string[];
+  steps: unknown[];
+  metadata?: Record<string, unknown>;
+  extensions?: unknown;
+}): string {
+  return JSON.stringify(input);
 }
 
 export function createTaskUseCase(
@@ -44,69 +32,110 @@ export function createTaskUseCase(
   input: CreateTaskInput,
 ): LightTaskTask {
   const publishEvent = resolveNotifyPublisher(options);
-  const taskLifecycle = resolveTaskLifecyclePolicy(options);
-  const nextTaskId = requireLightTaskFunction(
-    options.idGenerator?.nextTaskId,
-    "idGenerator.nextTaskId",
-  );
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
+  const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
   const createTask = requireLightTaskFunction(
     options.taskRepository?.create,
     "taskRepository.create",
   );
-  const taskId = nextTaskId().trim();
-  const now = clockNow();
+  const nextTaskId = requireLightTaskFunction(
+    options.idGenerator?.nextTaskId,
+    "idGenerator.nextTaskId",
+  );
+  const planId = input.planId.trim();
   const title = input.title.trim();
-  const summary = input.summary?.trim() || undefined;
-  const planId = resolveOptionalPlanId(input.planId);
-  const designStatus = resolveTaskDesignStatus(assertTaskDesignStatus(input.designStatus));
+  const status = input.status ?? "draft";
+  const dependsOnTaskIds = normalizeDependsOnTaskIds(input.dependsOnTaskIds);
 
-  if (!taskId) {
+  if (!planId) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", {
-        taskId,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "planId 不能为空", { planId: input.planId }),
     );
   }
-
   if (!title) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "任务标题不能为空", {
-        title: input.title,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "任务标题不能为空", { title: input.title }),
+    );
+  }
+  if (status !== "draft") {
+    throwLightTaskError(
+      createLightTaskError("STATE_CONFLICT", "createTask 初始状态只允许 draft", { status }),
+    );
+  }
+  if (!getPlan(planId)) {
+    throwLightTaskError(createLightTaskError("NOT_FOUND", "未找到计划", { planId }));
+  }
+
+  const taskId = nextTaskId().trim();
+  if (!taskId) {
+    throwLightTaskError(
+      createLightTaskError("INVARIANT_VIOLATION", "idGenerator.nextTaskId 返回了空白任务 ID"),
     );
   }
 
-  if (input.planId !== undefined && !planId) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "planId 不能为空", {
-        planId: input.planId,
-      }),
-    );
+  const steps = normalizeDefinitionSteps(taskId, input.steps);
+  const allTasks = listTasks();
+  const planTasks = allTasks.filter((task) => task.planId === planId);
+  assertTaskDependencies({
+    taskId,
+    planId,
+    dependsOnTaskIds,
+    allTasks,
+  });
+
+  const fingerprint = buildCreateTaskFingerprint({
+    planId,
+    title,
+    status,
+    summary: input.summary?.trim() || undefined,
+    dependsOnTaskIds,
+    steps,
+    metadata: input.metadata,
+    extensions: input.extensions,
+  });
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  if (normalizedIdempotencyKey) {
+    const replayed = planTasks.find((task) => task.idempotencyKey === normalizedIdempotencyKey);
+    if (replayed) {
+      if (replayed.lastCreateFingerprint === fingerprint) {
+        return toPublicTask(replayed);
+      }
+      throwLightTaskError(
+        createLightTaskError(
+          "STATE_CONFLICT",
+          "相同 idempotencyKey 对应的请求内容不一致，拒绝处理。",
+          {
+            idempotencyKey: normalizedIdempotencyKey,
+            incomingFingerprint: fingerprint,
+            storedFingerprint: replayed.lastCreateFingerprint,
+          },
+        ),
+      );
+    }
   }
 
   const task: PersistedLightTask = {
-    id: taskId,
-    planId,
-    title,
-    summary,
-    designStatus,
-    executionStatus: taskLifecycle.initialStatus,
-    revision: 1,
-    idempotencyKey: undefined,
-    createdAt: now,
-    updatedAt: now,
-    steps: createDefaultTaskSteps(taskId, designStatus),
-    metadata: cloneOptional(input.metadata),
-    extensions: cloneOptional(input.extensions),
+    ...createTaskRecord({
+      id: taskId,
+      planId,
+      title,
+      createdAt: clockNow(),
+      status,
+      summary: input.summary,
+      dependsOnTaskIds,
+      steps,
+      metadata: input.metadata,
+      extensions: input.extensions,
+      idempotencyKey: normalizedIdempotencyKey,
+    }),
+    lastCreateFingerprint: fingerprint,
   };
-
   const created = createTask(task);
   if (!created.ok) {
     throwLightTaskError(created.error);
   }
 
-  // 以仓储返回的快照为准，避免持久化层规范化后的结果无法反映到 API 返回值。
   const publicTask = toPublicTask(created.task);
   publishTaskCreatedEvent(publishEvent, publicTask);
   return publicTask;

@@ -1,5 +1,5 @@
 import { bumpRevision } from "../data-structures";
-import { assertExpectedRevision, assertNextRevision } from "../rules";
+import { assertExpectedRevision } from "../rules";
 import { cloneOptional } from "./clone";
 import {
   createLightTaskError,
@@ -15,36 +15,17 @@ import type {
   UpdatePlanInput,
 } from "./types";
 
-function assertPlanId(planId: string): string {
-  const normalizedPlanId = planId.trim();
-
-  if (!normalizedPlanId) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "计划 ID 不能为空", {
-        planId,
-      }),
-    );
-  }
-
-  return normalizedPlanId;
-}
-
 function hasOwnField(input: UpdatePlanInput, fieldName: keyof UpdatePlanInput): boolean {
   return Object.prototype.hasOwnProperty.call(input, fieldName);
 }
 
-function assertUpdatableFields(planId: string, input: UpdatePlanInput): void {
-  if (
-    !hasOwnField(input, "title") &&
-    !hasOwnField(input, "metadata") &&
-    !hasOwnField(input, "extensions")
-  ) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "更新计划时至少提供一个可变更字段", {
-        planId,
-      }),
-    );
-  }
+function buildUpdatePlanFingerprint(planId: string, input: UpdatePlanInput): string {
+  return JSON.stringify({
+    planId,
+    title: hasOwnField(input, "title") ? (input.title ?? null) : undefined,
+    metadata: hasOwnField(input, "metadata") ? (input.metadata ?? null) : undefined,
+    extensions: hasOwnField(input, "extensions") ? (input.extensions ?? null) : undefined,
+  });
 }
 
 export function updatePlanUseCase(
@@ -59,57 +40,63 @@ export function updatePlanUseCase(
     "planRepository.saveIfRevisionMatches",
   );
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
-  const normalizedPlanId = assertPlanId(planId);
-  const storedPlan = getPlan(normalizedPlanId);
+  const normalizedPlanId = planId.trim();
+  if (!normalizedPlanId) {
+    throwLightTaskError(createLightTaskError("VALIDATION_ERROR", "计划 ID 不能为空", { planId }));
+  }
 
+  const storedPlan = getPlan(normalizedPlanId);
   if (!storedPlan) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到计划", {
-        planId: normalizedPlanId,
-      }),
+      createLightTaskError("NOT_FOUND", "未找到计划", { planId: normalizedPlanId }),
     );
   }
 
-  if (input.expectedRevision === undefined) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "expectedRevision 为必填字段", {
-        planId: normalizedPlanId,
-      }),
-    );
-  }
-
-  assertUpdatableFields(normalizedPlanId, input);
   assertExpectedRevision(storedPlan.revision, input.expectedRevision);
-  assertNextRevision(storedPlan.revision, storedPlan.revision + 1);
+  const fingerprint = buildUpdatePlanFingerprint(normalizedPlanId, input);
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  if (input.idempotencyKey?.trim() && normalizedIdempotencyKey === storedPlan.idempotencyKey) {
+    if (storedPlan.lastUpdateFingerprint === fingerprint) {
+      return toPublicPlan(storedPlan);
+    }
+    if (storedPlan.lastUpdateFingerprint !== undefined) {
+      throwLightTaskError(
+        createLightTaskError(
+          "STATE_CONFLICT",
+          "相同 idempotencyKey 对应的请求内容不一致，拒绝处理。",
+          {
+            idempotencyKey: normalizedIdempotencyKey,
+            incomingFingerprint: fingerprint,
+            storedFingerprint: storedPlan.lastUpdateFingerprint,
+          },
+        ),
+      );
+    }
+  }
 
   const nextTitle = hasOwnField(input, "title") ? input.title?.trim() : storedPlan.title;
   if (!nextTitle) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "计划标题不能为空", {
-        title: input.title,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "计划标题不能为空", { title: input.title }),
     );
   }
 
-  const nextRevision = bumpRevision(storedPlan, clockNow(), storedPlan.idempotencyKey);
-  const nextPlanBase = clonePersistedPlan(storedPlan);
-
-  // 更新接口只负责结构化资料，不跨越到生命周期状态机，避免与 advancePlan 语义重叠。
+  const nextRevision = bumpRevision(storedPlan, clockNow(), normalizedIdempotencyKey);
   const nextPlan: PersistedLightPlan = {
-    ...nextPlanBase,
+    ...clonePersistedPlan(storedPlan),
     title: nextTitle,
     metadata: hasOwnField(input, "metadata")
       ? cloneOptional(input.metadata ?? undefined)
-      : nextPlanBase.metadata,
+      : storedPlan.metadata,
     extensions: hasOwnField(input, "extensions")
       ? cloneOptional(input.extensions ?? undefined)
-      : nextPlanBase.extensions,
+      : storedPlan.extensions,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,
+    lastUpdateFingerprint: fingerprint,
   };
   const saved = saveIfRevisionMatches(nextPlan, storedPlan.revision);
-
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }

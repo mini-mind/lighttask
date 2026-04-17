@@ -5,19 +5,17 @@ export type {
 } from "./ds-extension";
 
 export type {
-  TaskDesignStatus,
-  TaskLifecycleStatus,
-  PlanLifecycleStatus,
+  TaskStatus,
   RuntimeLifecycleStatus,
 } from "./ds-status";
 export {
-  DEFAULT_PLAN_TERMINAL_STATUSES,
+  DEFAULT_TASK_ACTIVE_STATUSES,
   DEFAULT_RUNTIME_TERMINAL_STATUSES,
   DEFAULT_TASK_TERMINAL_STATUSES,
-  TASK_DESIGN_STATUSES,
-  isTaskDesignStatus,
+  TASK_STATUSES,
+  isTaskActiveStatus,
+  isTaskStatus,
   isTaskTerminalStatus,
-  isPlanTerminalStatus,
   isRuntimeTerminalStatus,
 } from "./ds-status";
 
@@ -38,15 +36,18 @@ export {
 
 export type {
   TaskRecord,
+  TaskStage,
+  TaskStepRecord,
+  TaskStepStatus,
   CreateTaskRecordInput,
 } from "./ds-task";
 export { createTaskRecord } from "./ds-task";
 
 export type {
-  PlanSessionRecord,
-  CreatePlanSessionRecordInput,
+  PlanRecord,
+  CreatePlanRecordInput,
 } from "./ds-plan";
-export { createPlanSessionRecord } from "./ds-plan";
+export { createPlanRecord } from "./ds-plan";
 
 export type {
   RuntimeParentRef,
@@ -67,15 +68,6 @@ export type {
   CreateOutputRecordInput,
 } from "./ds-output";
 export { createOutputRecord } from "./ds-output";
-
-export type {
-  DependencyKind,
-  GraphNodeRecord,
-  GraphEdgeRecord,
-  GraphSnapshot,
-  CreateGraphSnapshotInput,
-} from "./ds-graph";
-export { createGraphSnapshot } from "./ds-graph";
 
 export type {
   DomainEventAggregate,

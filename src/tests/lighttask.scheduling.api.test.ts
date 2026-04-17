@@ -1,546 +1,303 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LightTaskError, type LightTaskGraph, type LightTaskTask, createLightTask } from "../index";
+import type { PersistedLightTask } from "../core/types";
+import { LightTaskError, createLightTask } from "../index";
 import { createInMemoryTaskRepository } from "../ports/in-memory";
+import { createTestLightTask } from "./ports-fixture";
 import { createTestLightTaskOptions } from "./ports-fixture";
 
-type TaskRecordFixture = LightTaskTask & {
-  lastAdvanceFingerprint?: string;
-};
+test("Scheduling Facts：能区分 draft/runnable/blocked/active/terminal/risk", () => {
+  const { lighttask, planId } = createTestLightTask();
+  const draft = lighttask.createTask({
+    planId,
+    title: "草稿",
+  });
+  const runnable = lighttask.createTask({
+    planId,
+    title: "可执行",
+  });
+  const blocked = lighttask.createTask({
+    planId,
+    title: "被阻塞",
+    dependsOnTaskIds: [draft.id],
+  });
+  const active = lighttask.createTask({
+    planId,
+    title: "进行中",
+  });
+  const terminal = lighttask.createTask({
+    planId,
+    title: "已完成",
+  });
 
-type ExpectedLightTaskError = {
-  code: string;
-  message?: string;
-  details?: Record<string, unknown>;
-};
+  const runnableTodo = lighttask.advanceTask(runnable.id, {
+    action: "finalize",
+    expectedRevision: runnable.revision,
+  });
+  const blockedTodo = lighttask.advanceTask(blocked.id, {
+    action: "finalize",
+    expectedRevision: blocked.revision,
+  });
+  const activeTodo = lighttask.advanceTask(active.id, {
+    action: "finalize",
+    expectedRevision: active.revision,
+  });
+  const activeDispatched = lighttask.advanceTask(active.id, {
+    action: "dispatch",
+    expectedRevision: activeTodo.revision,
+  });
+  const activeRunning = lighttask.advanceTask(active.id, {
+    action: "start",
+    expectedRevision: activeDispatched.revision,
+  });
+  const terminalTodo = lighttask.advanceTask(terminal.id, {
+    action: "finalize",
+    expectedRevision: terminal.revision,
+  });
+  const terminalDispatched = lighttask.advanceTask(terminal.id, {
+    action: "dispatch",
+    expectedRevision: terminalTodo.revision,
+  });
+  const terminalRunning = lighttask.advanceTask(terminal.id, {
+    action: "start",
+    expectedRevision: terminalDispatched.revision,
+  });
+  const terminalCompleted = lighttask.advanceTask(terminal.id, {
+    action: "complete",
+    expectedRevision: terminalRunning.revision,
+  });
 
-function expectLightTaskError(
-  action: () => unknown,
-  expected: ExpectedLightTaskError,
-  message?: string,
-): void {
+  assert.equal(runnableTodo.status, "todo");
+  assert.equal(blockedTodo.status, "todo");
+  assert.equal(activeRunning.status, "running");
+  assert.equal(terminalCompleted.status, "completed");
+
+  const facts = lighttask.getPlanSchedulingFacts(planId);
+  assert.deepEqual(facts.draftTaskIds, [draft.id]);
+  assert.deepEqual(facts.runnableTaskIds, [runnable.id]);
+  assert.deepEqual(facts.blockedTaskIds, [blocked.id]);
+  assert.deepEqual(facts.activeTaskIds, [active.id]);
+  assert.deepEqual(facts.terminalTaskIds, [terminal.id]);
+  assert.deepEqual(facts.byTaskId[blocked.id].blockReasonCodes, ["dependency_in_draft"]);
+});
+
+test("Scheduling Facts：todo 返回 draft 后，已开始下游被标记为风险", () => {
+  const taskRepository = createInMemoryTaskRepository<PersistedLightTask>();
+  taskRepository.create({
+    id: "task_upstream",
+    planId: "plan_risk",
+    title: "上游",
+    status: "draft",
+    dependsOnTaskIds: [],
+    revision: 3,
+    idempotencyKey: "req_upstream",
+    createdAt: "2026-04-16T00:00:00.000Z",
+    updatedAt: "2026-04-16T00:03:00.000Z",
+    steps: [],
+  });
+  taskRepository.create({
+    id: "task_downstream",
+    planId: "plan_risk",
+    title: "下游",
+    status: "dispatched",
+    dependsOnTaskIds: ["task_upstream"],
+    revision: 4,
+    idempotencyKey: "req_downstream",
+    createdAt: "2026-04-16T00:01:00.000Z",
+    updatedAt: "2026-04-16T00:04:00.000Z",
+    steps: [],
+  });
+  const lighttask = createLightTask(
+    createTestLightTaskOptions({
+      taskRepository,
+    }),
+  );
+  const planId = "plan_risk";
+  lighttask.createPlan({
+    id: planId,
+    title: "风险计划",
+  });
+  const facts = lighttask.getPlanSchedulingFacts(planId);
+  assert.deepEqual(facts.riskTaskIds, ["task_downstream"]);
+  assert.deepEqual(facts.byTaskId.task_downstream.riskReasonCodes, ["upstream_returned_to_draft"]);
+});
+
+test("Scheduling Facts：failed/cancelled/missing 依赖会映射到明确阻塞原因", () => {
+  const taskRepository = createInMemoryTaskRepository<PersistedLightTask>();
+  taskRepository.create({
+    id: "task_failed",
+    planId: "plan_blocked",
+    title: "失败上游",
+    status: "failed",
+    dependsOnTaskIds: [],
+    revision: 2,
+    createdAt: "2026-04-16T00:00:00.000Z",
+    updatedAt: "2026-04-16T00:01:00.000Z",
+    steps: [],
+  });
+  taskRepository.create({
+    id: "task_cancelled",
+    planId: "plan_blocked",
+    title: "取消上游",
+    status: "cancelled",
+    dependsOnTaskIds: [],
+    revision: 2,
+    createdAt: "2026-04-16T00:00:10.000Z",
+    updatedAt: "2026-04-16T00:01:10.000Z",
+    steps: [],
+  });
+  taskRepository.create({
+    id: "task_wait_failed",
+    planId: "plan_blocked",
+    title: "等待失败上游",
+    status: "todo",
+    dependsOnTaskIds: ["task_failed"],
+    revision: 1,
+    createdAt: "2026-04-16T00:02:00.000Z",
+    updatedAt: "2026-04-16T00:02:00.000Z",
+    steps: [],
+  });
+  taskRepository.create({
+    id: "task_wait_cancelled",
+    planId: "plan_blocked",
+    title: "等待取消上游",
+    status: "todo",
+    dependsOnTaskIds: ["task_cancelled"],
+    revision: 1,
+    createdAt: "2026-04-16T00:02:10.000Z",
+    updatedAt: "2026-04-16T00:02:10.000Z",
+    steps: [],
+  });
+  taskRepository.create({
+    id: "task_wait_missing",
+    planId: "plan_blocked",
+    title: "等待缺失上游",
+    status: "todo",
+    dependsOnTaskIds: ["task_missing"],
+    revision: 1,
+    createdAt: "2026-04-16T00:02:20.000Z",
+    updatedAt: "2026-04-16T00:02:20.000Z",
+    steps: [],
+  });
+  const lighttask = createLightTask(
+    createTestLightTaskOptions({
+      taskRepository,
+    }),
+  );
+  lighttask.createPlan({
+    id: "plan_blocked",
+    title: "阻塞计划",
+  });
+
+  const facts = lighttask.getPlanSchedulingFacts("plan_blocked");
+  assert.deepEqual(facts.byTaskId.task_wait_failed.blockReasonCodes, ["dependency_failed"]);
+  assert.deepEqual(facts.byTaskId.task_wait_cancelled.blockReasonCodes, ["dependency_cancelled"]);
+  assert.deepEqual(facts.byTaskId.task_wait_missing.blockReasonCodes, ["dependency_missing"]);
+  assert.deepEqual(facts.byTaskId.task_wait_missing.missingDependencyTaskIds, ["task_missing"]);
+});
+
+test("Scheduling Facts：未完成上游会映射为 dependency_not_done", () => {
+  const { lighttask, planId } = createTestLightTask("plan_not_done");
+  const upstream = lighttask.createTask({
+    planId,
+    title: "上游",
+  });
+  const downstream = lighttask.createTask({
+    planId,
+    title: "下游",
+    dependsOnTaskIds: [upstream.id],
+  });
+  const upstreamTodo = lighttask.advanceTask(upstream.id, {
+    action: "finalize",
+    expectedRevision: upstream.revision,
+  });
+  const downstreamTodo = lighttask.advanceTask(downstream.id, {
+    action: "finalize",
+    expectedRevision: downstream.revision,
+  });
+
+  const facts = lighttask.getPlanSchedulingFacts(planId);
+  assert.equal(upstreamTodo.status, "todo");
+  assert.equal(downstreamTodo.status, "todo");
+  assert.deepEqual(facts.byTaskId[downstream.id].blockReasonCodes, ["dependency_not_done"]);
+  assert.deepEqual(facts.byTaskId[downstream.id].unmetDependencyTaskIds, [upstream.id]);
+});
+
+test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖和环依赖", () => {
+  const { lighttask, planId } = createTestLightTask("plan_dep_a");
+  lighttask.createPlan({
+    id: "plan_dep_b",
+    title: "计划 B",
+  });
+  const taskA = lighttask.createTask({
+    planId,
+    title: "任务 A",
+  });
+  const taskB = lighttask.createTask({
+    planId,
+    title: "任务 B",
+  });
+  const taskOtherPlan = lighttask.createTask({
+    planId: "plan_dep_b",
+    title: "任务 C",
+  });
+
   assert.throws(
-    action,
+    () =>
+      lighttask.createTask({
+        planId,
+        title: "跨计划创建",
+        dependsOnTaskIds: [taskOtherPlan.id],
+      }),
     (error) => {
       assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, expected.code);
-
-      if (expected.message !== undefined) {
-        assert.equal(error.coreError.message, expected.message);
-      }
-
-      for (const [detailKey, detailValue] of Object.entries(expected.details ?? {})) {
-        assert.equal(
-          (error.details as Record<string, unknown> | undefined)?.[detailKey],
-          detailValue,
-        );
-      }
-
+      assert.equal(error.code, "STATE_CONFLICT");
       return true;
     },
-    message,
   );
-}
 
-function createSchedulingTestTaskFixture(input: {
-  id: string;
-  planId: string;
-  nodeId: string;
-  nodeTaskId: string;
-  designStatus?: TaskRecordFixture["designStatus"];
-  executionStatus: TaskRecordFixture["executionStatus"];
-  governanceState?: "active" | "orphaned";
-  orphanedAtGraphRevision?: number;
-}): TaskRecordFixture {
-  const governance =
-    input.governanceState === "orphaned"
-      ? {
-          state: "orphaned" as const,
-          orphanedAtGraphRevision: input.orphanedAtGraphRevision,
-        }
-      : {
-          state: "active" as const,
-        };
-
-  return {
-    id: input.id,
-    planId: input.planId,
-    title: `任务 ${input.nodeId}`,
-    designStatus: input.designStatus ?? "ready",
-    executionStatus: input.executionStatus,
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    steps: [],
-    extensions: {
-      namespaces: {
-        lighttask: {
-          kind: "materialized_plan_task",
-          source: {
-            graphScope: "published",
-            graphRevision: 1,
-            nodeId: input.nodeId,
-            nodeTaskId: input.nodeTaskId,
-          },
-          governance,
-        },
-      },
-    },
-  };
-}
-
-function createPublishedGraphRepository(planId: string, graph: LightTaskGraph) {
-  return {
-    get(targetPlanId: string, scope?: string) {
-      return targetPlanId === planId && scope === "published" ? structuredClone(graph) : undefined;
-    },
-    create() {
-      throw new Error("本用例不应写入图仓储");
-    },
-    saveIfRevisionMatches() {
-      throw new Error("本用例不应更新图仓储");
-    },
-  };
-}
-
-test("LightTask Scheduling Facts API 返回稳定顺序、节点分类与显式阻塞原因", () => {
-  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
-  const seededTasks = [
-    createSchedulingTestTaskFixture({
-      id: "task_node_a",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_a",
-      nodeTaskId: "task_node_a",
-      executionStatus: "completed",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_b",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_b",
-      nodeTaskId: "task_node_b",
-      executionStatus: "queued",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_d",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_d",
-      nodeTaskId: "task_node_d",
-      executionStatus: "running",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_e",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_e",
-      nodeTaskId: "task_node_e",
-      executionStatus: "queued",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_f",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_f",
-      nodeTaskId: "task_node_f",
-      executionStatus: "failed",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_g",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_g",
-      nodeTaskId: "task_node_g",
-      executionStatus: "queued",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_h",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_h",
-      nodeTaskId: "task_node_h",
-      executionStatus: "blocked_by_approval",
-    }),
-    createSchedulingTestTaskFixture({
-      id: "task_node_i",
-      planId: "plan_scheduling_facts",
-      nodeId: "node_i",
-      nodeTaskId: "task_node_i",
-      executionStatus: "dispatched",
-    }),
-  ];
-
-  for (const task of seededTasks) {
-    const created = taskRepository.create(task);
-    assert.equal(created.ok, true);
-  }
-
-  const publishedGraph: LightTaskGraph = {
-    nodes: [
-      { id: "node_a", taskId: "task_node_a", label: "任务 A" },
-      { id: "node_b", taskId: "task_node_b", label: "任务 B" },
-      { id: "node_c", taskId: "graph_task_c", label: "任务 C" },
-      { id: "node_d", taskId: "task_node_d", label: "任务 D" },
-      { id: "node_e", taskId: "task_node_e", label: "任务 E" },
-      { id: "node_f", taskId: "task_node_f", label: "任务 F" },
-      { id: "node_g", taskId: "task_node_g", label: "任务 G" },
-      { id: "node_h", taskId: "task_node_h", label: "任务 H" },
-      { id: "node_i", taskId: "task_node_i", label: "任务 I" },
-    ],
-    edges: [
-      { id: "edge_ab", fromNodeId: "node_b", toNodeId: "node_a", kind: "depends_on" },
-      { id: "edge_ed", fromNodeId: "node_e", toNodeId: "node_d", kind: "depends_on" },
-      { id: "edge_gf", fromNodeId: "node_g", toNodeId: "node_f", kind: "depends_on" },
-    ],
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    updatedAt: "2026-04-14T00:00:00.000Z",
-  };
-  const lighttask = createLightTask(
-    createTestLightTaskOptions({
-      taskRepository,
-      graphRepository: createPublishedGraphRepository("plan_scheduling_facts", publishedGraph),
-    }),
-  );
-  lighttask.createPlan({
-    id: "plan_scheduling_facts",
-    title: "调度事实",
-  });
-
-  const beforeTaskCount = lighttask.listTasksByPlan("plan_scheduling_facts").length;
-  const facts = lighttask.getPlanSchedulingFacts("  plan_scheduling_facts  ", {
-    expectedPublishedGraphRevision: 1,
-  });
-
-  assert.equal(facts.planId, "plan_scheduling_facts");
-  assert.equal(facts.planStatus, "draft");
-  assert.equal(facts.publishedGraphRevision, 1);
-  assert.deepEqual(facts.orderedNodeIds, [
-    "node_a",
-    "node_b",
-    "node_c",
-    "node_d",
-    "node_e",
-    "node_f",
-    "node_g",
-    "node_h",
-    "node_i",
-  ]);
-  assert.deepEqual(facts.readyNodeIds, ["node_b", "node_c", "node_d", "node_h", "node_i"]);
-  assert.deepEqual(facts.runnableNodeIds, ["node_b"]);
-  assert.deepEqual(facts.blockedNodeIds, [
-    "node_c",
-    "node_d",
-    "node_e",
-    "node_g",
-    "node_h",
-    "node_i",
-  ]);
-  assert.deepEqual(facts.terminalNodeIds, ["node_a", "node_f"]);
-  assert.deepEqual(facts.completedNodeIds, ["node_a"]);
-
-  assert.deepEqual(facts.byNodeId.node_b, {
-    nodeId: "node_b",
-    graphTaskId: "task_node_b",
-    taskId: "task_node_b",
-    taskDesignStatus: "ready",
-    taskStatus: "queued",
-    isReady: true,
-    isRunnable: true,
-    isTerminal: false,
-    blockReason: undefined,
-  });
-  assert.deepEqual(facts.byNodeId.node_c, {
-    nodeId: "node_c",
-    graphTaskId: "graph_task_c",
-    taskId: undefined,
-    taskDesignStatus: undefined,
-    taskStatus: undefined,
-    isReady: true,
-    isRunnable: false,
-    isTerminal: false,
-    blockReason: {
-      code: "missing_task",
-    },
-  });
-  assert.deepEqual(facts.byNodeId.node_d?.blockReason, {
-    code: "task_running",
-    taskStatus: "running",
-  });
-  assert.deepEqual(facts.byNodeId.node_e?.blockReason, {
-    code: "waiting_for_prerequisites",
-    unmetPrerequisites: [{ nodeId: "node_d", taskStatus: "running" }],
-  });
-  assert.deepEqual(facts.byNodeId.node_g?.blockReason, {
-    code: "waiting_for_prerequisites",
-    unmetPrerequisites: [{ nodeId: "node_f", taskStatus: "failed" }],
-  });
-  assert.deepEqual(facts.byNodeId.node_h?.blockReason, {
-    code: "task_blocked_by_approval",
-    taskStatus: "blocked_by_approval",
-  });
-  assert.deepEqual(facts.byNodeId.node_i?.blockReason, {
-    code: "task_dispatched",
-    taskStatus: "dispatched",
-  });
-  assert.equal(lighttask.listTasksByPlan("plan_scheduling_facts").length, beforeTaskCount);
-});
-
-test("LightTask Scheduling Facts API 会忽略 orphaned 物化任务", () => {
-  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
-  const created = taskRepository.create(
-    createSchedulingTestTaskFixture({
-      id: "task_node_orphaned",
-      planId: "plan_scheduling_orphaned",
-      nodeId: "node_orphaned",
-      nodeTaskId: "graph_task_orphaned_v1",
-      executionStatus: "completed",
-      governanceState: "orphaned",
-      orphanedAtGraphRevision: 2,
-    }),
-  );
-  assert.equal(created.ok, true);
-
-  const publishedGraph: LightTaskGraph = {
-    nodes: [{ id: "node_orphaned", taskId: "graph_task_orphaned_v2", label: "任务孤儿" }],
-    edges: [],
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    updatedAt: "2026-04-14T00:00:00.000Z",
-  };
-  const lighttask = createLightTask(
-    createTestLightTaskOptions({
-      taskRepository,
-      graphRepository: createPublishedGraphRepository("plan_scheduling_orphaned", publishedGraph),
-    }),
-  );
-  lighttask.createPlan({
-    id: "plan_scheduling_orphaned",
-    title: "忽略孤儿任务",
-  });
-
-  const facts = lighttask.getPlanSchedulingFacts("plan_scheduling_orphaned", {
-    expectedPublishedGraphRevision: 1,
-  });
-
-  assert.deepEqual(facts.readyNodeIds, ["node_orphaned"]);
-  assert.deepEqual(facts.completedNodeIds, []);
-  assert.deepEqual(facts.byNodeId.node_orphaned, {
-    nodeId: "node_orphaned",
-    graphTaskId: "graph_task_orphaned_v2",
-    taskId: undefined,
-    taskDesignStatus: undefined,
-    taskStatus: undefined,
-    isReady: true,
-    isRunnable: false,
-    isTerminal: false,
-    blockReason: {
-      code: "missing_task",
-    },
-  });
-});
-
-test("LightTask Scheduling Facts API 在已发布图 revision 不匹配时返回 REVISION_CONFLICT", () => {
-  const publishedGraph: LightTaskGraph = {
-    nodes: [{ id: "node_1", taskId: "graph_task_1", label: "任务一" }],
-    edges: [],
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    updatedAt: "2026-04-14T00:00:00.000Z",
-  };
-  const lighttask = createLightTask(
-    createTestLightTaskOptions({
-      graphRepository: createPublishedGraphRepository(
-        "plan_scheduling_revision_conflict",
-        publishedGraph,
-      ),
-    }),
-  );
-  lighttask.createPlan({
-    id: "plan_scheduling_revision_conflict",
-    title: "revision 冲突",
-  });
-
-  expectLightTaskError(
+  assert.throws(
     () =>
-      lighttask.getPlanSchedulingFacts("plan_scheduling_revision_conflict", {
-        expectedPublishedGraphRevision: 2,
+      lighttask.updateTask(taskA.id, {
+        expectedRevision: taskA.revision,
+        dependsOnTaskIds: [taskA.id],
       }),
-    {
-      code: "REVISION_CONFLICT",
-      message: "expectedPublishedGraphRevision 与当前已发布图 revision 不一致",
-      details: {
-        currentPublishedGraphRevision: 1,
-        expectedPublishedGraphRevision: 2,
-      },
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "STATE_CONFLICT");
+      return true;
     },
   );
-});
 
-test("LightTask Scheduling Facts API 会把 designStatus 非 ready 显式表达为调度阻塞", () => {
-  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
-  const created = taskRepository.create(
-    createSchedulingTestTaskFixture({
-      id: "task_node_draft",
-      planId: "plan_scheduling_design_block",
-      nodeId: "node_draft",
-      nodeTaskId: "task_node_draft",
-      designStatus: "draft",
-      executionStatus: "queued",
-    }),
-  );
-  assert.equal(created.ok, true);
-
-  const publishedGraph: LightTaskGraph = {
-    nodes: [{ id: "node_draft", taskId: "task_node_draft", label: "草稿任务" }],
-    edges: [],
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    updatedAt: "2026-04-14T00:00:00.000Z",
-  };
-  const lighttask = createLightTask(
-    createTestLightTaskOptions({
-      taskRepository,
-      graphRepository: createPublishedGraphRepository(
-        "plan_scheduling_design_block",
-        publishedGraph,
-      ),
-    }),
-  );
-  lighttask.createPlan({
-    id: "plan_scheduling_design_block",
-    title: "设计态阻塞",
-  });
-
-  const facts = lighttask.getPlanSchedulingFacts("plan_scheduling_design_block", {
-    expectedPublishedGraphRevision: 1,
-  });
-
-  assert.deepEqual(facts.readyNodeIds, ["node_draft"]);
-  assert.deepEqual(facts.runnableNodeIds, []);
-  assert.deepEqual(facts.blockedNodeIds, ["node_draft"]);
-  assert.deepEqual(facts.byNodeId.node_draft, {
-    nodeId: "node_draft",
-    graphTaskId: "task_node_draft",
-    taskId: "task_node_draft",
-    taskDesignStatus: "draft",
-    taskStatus: "queued",
-    isReady: true,
-    isRunnable: false,
-    isTerminal: false,
-    blockReason: {
-      code: "task_design_incomplete",
-      taskDesignStatus: "draft",
-    },
-  });
-});
-
-test("LightTask Scheduling Facts API 可直接基于 graph.taskId 命中真实 Task，无需先物化 provenance", () => {
-  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
-  const created = taskRepository.create({
-    id: "task_direct_ref",
-    planId: "plan_scheduling_direct_ref",
-    title: "直接引用任务",
-    designStatus: "ready",
-    executionStatus: "queued",
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    steps: [],
-  });
-  assert.equal(created.ok, true);
-
-  const lighttask = createLightTask(createTestLightTaskOptions({ taskRepository }));
-  lighttask.createPlan({
-    id: "plan_scheduling_direct_ref",
-    title: "直接任务引用",
-  });
-  lighttask.saveGraph("plan_scheduling_direct_ref", {
-    nodes: [{ id: "node_direct_ref", taskId: "task_direct_ref", label: "任务直连" }],
-    edges: [],
-  });
-  lighttask.publishGraph("plan_scheduling_direct_ref", {
-    expectedRevision: 1,
-  });
-
-  const facts = lighttask.getPlanSchedulingFacts("plan_scheduling_direct_ref", {
-    expectedPublishedGraphRevision: 1,
-  });
-
-  assert.deepEqual(facts.runnableNodeIds, ["node_direct_ref"]);
-  assert.deepEqual(facts.byNodeId.node_direct_ref, {
-    nodeId: "node_direct_ref",
-    graphTaskId: "task_direct_ref",
-    taskId: "task_direct_ref",
-    taskDesignStatus: "ready",
-    taskStatus: "queued",
-    isReady: true,
-    isRunnable: true,
-    isTerminal: false,
-    blockReason: undefined,
-  });
-});
-
-test("LightTask Scheduling Facts API 会拒绝 graph 引用未归属当前计划的 Task", () => {
-  const taskRepository = createInMemoryTaskRepository<TaskRecordFixture>();
-  const created = taskRepository.create({
-    id: "task_cross_plan_ref",
-    planId: "plan_other_owner",
-    title: "跨计划任务",
-    designStatus: "ready",
-    executionStatus: "queued",
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    steps: [],
-  });
-  assert.equal(created.ok, true);
-
-  const publishedGraph: LightTaskGraph = {
-    nodes: [{ id: "node_cross_plan", taskId: "task_cross_plan_ref", label: "跨计划节点" }],
-    edges: [],
-    revision: 1,
-    createdAt: "2026-04-14T00:00:00.000Z",
-    updatedAt: "2026-04-14T00:00:00.000Z",
-  };
-  const lighttask = createLightTask(
-    createTestLightTaskOptions({
-      taskRepository,
-      graphRepository: createPublishedGraphRepository("plan_scheduling_cross_plan", publishedGraph),
-    }),
-  );
-  lighttask.createPlan({
-    id: "plan_scheduling_cross_plan",
-    title: "跨计划引用冲突",
-  });
-
-  expectLightTaskError(
+  assert.throws(
     () =>
-      lighttask.getPlanSchedulingFacts("plan_scheduling_cross_plan", {
-        expectedPublishedGraphRevision: 1,
+      lighttask.updateTask(taskA.id, {
+        expectedRevision: taskA.revision,
+        dependsOnTaskIds: [taskOtherPlan.id],
       }),
-    {
-      code: "STATE_CONFLICT",
-      message: "图节点引用的任务未归属当前计划",
-      details: {
-        planId: "plan_scheduling_cross_plan",
-        nodeId: "node_cross_plan",
-        taskId: "task_cross_plan_ref",
-        taskPlanId: "plan_other_owner",
-      },
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "STATE_CONFLICT");
+      return true;
     },
   );
-});
 
-test("LightTask Scheduling Facts API 在已发布图缺失时返回 NOT_FOUND", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-  lighttask.createPlan({
-    id: "plan_scheduling_missing_graph",
-    title: "缺失已发布图",
+  const taskBLinked = lighttask.updateTask(taskB.id, {
+    expectedRevision: taskB.revision,
+    dependsOnTaskIds: [taskA.id],
   });
+  assert.deepEqual(taskBLinked.dependsOnTaskIds, [taskA.id]);
 
-  expectLightTaskError(
+  assert.throws(
     () =>
-      lighttask.getPlanSchedulingFacts("plan_scheduling_missing_graph", {
-        expectedPublishedGraphRevision: 1,
+      lighttask.updateTask(taskA.id, {
+        expectedRevision: taskA.revision,
+        dependsOnTaskIds: [taskB.id],
       }),
-    {
-      code: "NOT_FOUND",
-      message: "未找到已发布图快照，无法计算计划调度事实",
-      details: {
-        planId: "plan_scheduling_missing_graph",
-      },
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "STATE_CONFLICT");
+      return true;
     },
   );
 });

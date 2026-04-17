@@ -6,6 +6,11 @@ export function clonePersistedPlan(plan: PersistedLightPlan): PersistedLightPlan
 }
 
 export function toPublicPlan(plan: PersistedLightPlan): LightTaskPlan {
-  // 计划当前没有内部专属字段，但依然统一走快照转换，后续扩展时不用改 API 层调用方。
-  return clonePersistedPlan(plan);
+  const {
+    lastCreateFingerprint: _lastCreateFingerprint,
+    lastUpdateFingerprint: _lastUpdateFingerprint,
+    deleteTaskReplayByIdempotencyKey: _deleteTaskReplayByIdempotencyKey,
+    ...publicPlan
+  } = plan;
+  return cloneValue(publicPlan);
 }

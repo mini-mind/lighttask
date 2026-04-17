@@ -6,5 +6,10 @@ export function clonePersistedRuntime(runtime: PersistedLightRuntime): Persisted
 }
 
 export function toPublicRuntime(runtime: PersistedLightRuntime): LightTaskRuntime {
-  return clonePersistedRuntime(runtime);
+  const {
+    lastCreateFingerprint: _lastCreateFingerprint,
+    lastAdvanceFingerprint: _lastAdvanceFingerprint,
+    ...publicRuntime
+  } = runtime;
+  return cloneValue(publicRuntime);
 }

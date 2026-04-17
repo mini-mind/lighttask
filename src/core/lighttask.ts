@@ -1,32 +1,24 @@
 import { advanceOutputUseCase } from "./advance-output";
-import { advancePlanUseCase } from "./advance-plan";
 import { advanceRuntimeUseCase } from "./advance-runtime";
 import { advanceTaskUseCase } from "./advance-task";
 import { createOutputUseCase } from "./create-output";
 import { createPlanUseCase } from "./create-plan";
 import { createRuntimeUseCase } from "./create-runtime";
 import { createTaskUseCase } from "./create-task";
-import { editGraphUseCase } from "./edit-graph";
-import { getGraphUseCase } from "./get-graph";
+import { deleteTaskUseCase } from "./delete-task";
 import { getOutputUseCase } from "./get-output";
 import { getPlanUseCase } from "./get-plan";
 import { getPlanSchedulingFactsUseCase } from "./get-plan-scheduling-facts";
-import { getPublishedGraphUseCase } from "./get-published-graph";
 import { getRuntimeUseCase } from "./get-runtime";
 import { getTaskUseCase } from "./get-task";
-import { launchPlanUseCase } from "./launch-plan";
 import { toLightTaskError } from "./lighttask-error";
 import { listOutputsUseCase } from "./list-outputs";
 import { listPlansUseCase } from "./list-plans";
 import { listRuntimesUseCase } from "./list-runtimes";
 import { listTasksUseCase } from "./list-tasks";
 import { listTasksByPlanUseCase } from "./list-tasks-by-plan";
-import { materializePlanTasksUseCase } from "./materialize-plan-tasks";
-import { publishGraphUseCase } from "./publish-graph";
-import { saveGraphUseCase } from "./save-graph";
 import type {
   AdvanceOutputInput,
-  AdvancePlanInput,
   AdvanceRuntimeInput,
   AdvanceTaskInput,
   CreateLightTaskOptions,
@@ -34,12 +26,9 @@ import type {
   CreatePlanInput,
   CreateRuntimeInput,
   CreateTaskInput,
-  EditGraphInput,
-  GetPlanSchedulingFactsInput,
+  DeleteTaskInput,
+  DeleteTaskResult,
   GetPlanSchedulingFactsResult,
-  LaunchPlanInput,
-  LaunchPlanResult,
-  LightTaskGraph,
   LightTaskKernel,
   LightTaskOutput,
   LightTaskPlan,
@@ -48,19 +37,12 @@ import type {
   ListOutputsInput,
   ListRuntimesInput,
   ListTasksInput,
-  MaterializePlanTasksInput,
-  MaterializePlanTasksResult,
-  PublishGraphInput,
-  SaveGraphInput,
   UpdatePlanInput,
   UpdateTaskInput,
 } from "./types";
 import { updatePlanUseCase } from "./update-plan";
 import { updateTaskUseCase } from "./update-task";
 
-/**
- * 这里先只实现通用编排模型，不混入应用层的 UI、平台适配和持久化策略。
- */
 class LightTaskKernelFacade implements LightTaskKernel {
   constructor(private readonly options: CreateLightTaskOptions) {}
 
@@ -88,6 +70,10 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => advanceTaskUseCase(this.options, taskId, input));
   }
 
+  deleteTask(taskId: string, input: DeleteTaskInput): DeleteTaskResult {
+    return this.runWithErrorBoundary(() => deleteTaskUseCase(this.options, taskId, input));
+  }
+
   createPlan(input: CreatePlanInput): LightTaskPlan {
     return this.runWithErrorBoundary(() => createPlanUseCase(this.options, input));
   }
@@ -102,10 +88,6 @@ class LightTaskKernelFacade implements LightTaskKernel {
 
   updatePlan(planId: string, input: UpdatePlanInput): LightTaskPlan {
     return this.runWithErrorBoundary(() => updatePlanUseCase(this.options, planId, input));
-  }
-
-  advancePlan(planId: string, input: AdvancePlanInput): LightTaskPlan {
-    return this.runWithErrorBoundary(() => advancePlanUseCase(this.options, planId, input));
   }
 
   createRuntime(input: CreateRuntimeInput): LightTaskRuntime {
@@ -140,46 +122,8 @@ class LightTaskKernelFacade implements LightTaskKernel {
     return this.runWithErrorBoundary(() => advanceOutputUseCase(this.options, outputId, input));
   }
 
-  getGraph(planId: string): LightTaskGraph | undefined {
-    return this.runWithErrorBoundary(() => getGraphUseCase(this.options, planId));
-  }
-
-  saveGraph(planId: string, input: SaveGraphInput): LightTaskGraph {
-    return this.runWithErrorBoundary(() => saveGraphUseCase(this.options, planId, input));
-  }
-
-  editGraph(planId: string, input: EditGraphInput): LightTaskGraph {
-    return this.runWithErrorBoundary(() => editGraphUseCase(this.options, planId, input));
-  }
-
-  getPublishedGraph(planId: string): LightTaskGraph | undefined {
-    return this.runWithErrorBoundary(() => getPublishedGraphUseCase(this.options, planId));
-  }
-
-  publishGraph(planId: string, input: PublishGraphInput): LightTaskGraph {
-    return this.runWithErrorBoundary(() => publishGraphUseCase(this.options, planId, input));
-  }
-
-  materializePlanTasks(
-    planId: string,
-    input: MaterializePlanTasksInput,
-  ): MaterializePlanTasksResult {
-    return this.runWithErrorBoundary(() =>
-      materializePlanTasksUseCase(this.options, planId, input),
-    );
-  }
-
-  getPlanSchedulingFacts(
-    planId: string,
-    input: GetPlanSchedulingFactsInput,
-  ): GetPlanSchedulingFactsResult {
-    return this.runWithErrorBoundary(() =>
-      getPlanSchedulingFactsUseCase(this.options, planId, input),
-    );
-  }
-
-  launchPlan(planId: string, input: LaunchPlanInput): LaunchPlanResult {
-    return this.runWithErrorBoundary(() => launchPlanUseCase(this.options, planId, input));
+  getPlanSchedulingFacts(planId: string): GetPlanSchedulingFactsResult {
+    return this.runWithErrorBoundary(() => getPlanSchedulingFactsUseCase(this.options, planId));
   }
 
   private runWithErrorBoundary<TResult>(runner: () => TResult): TResult {

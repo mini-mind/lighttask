@@ -1,7 +1,6 @@
 export type {
-  PlanLifecycleStatus,
   RuntimeLifecycleStatus,
-  TaskLifecycleStatus,
+  TaskStatus,
 } from "../data-structures";
 
 export type {
@@ -17,26 +16,9 @@ export {
   defaultTaskLifecyclePolicy,
   getNextTaskStatus,
   resolveTaskStepProgress,
-  selectDefaultTaskAction,
   transitionTaskStatus,
   listTaskActions,
 } from "./rule-task-fsm";
-
-export type {
-  CreatePlanLifecyclePolicyInput,
-  PlanAction,
-  PlanLifecyclePolicy,
-  PlanTransitionResult,
-} from "./rule-plan-fsm";
-export {
-  canPlanTransition,
-  createPlanLifecyclePolicy,
-  defaultPlanLifecyclePolicy,
-  getNextPlanStatus,
-  transitionPlanStatus,
-  listPlanActions,
-  selectDefaultPlanAction,
-} from "./rule-plan-fsm";
 
 export type {
   CreateRuntimeLifecyclePolicyInput,
@@ -53,20 +35,6 @@ export {
   listRuntimeActions,
   selectDefaultRuntimeAction,
 } from "./rule-runtime-fsm";
-
-export type {
-  DagValidationResult,
-  GraphEditOperation,
-  GraphEditResult,
-  NormalizedDagEdge,
-} from "./rule-graph";
-export {
-  applyGraphEditOperations,
-  findReadyNodeIds,
-  normalizeGraphEditOperations,
-  topologicalSort,
-  validateDagSnapshot,
-} from "./rule-graph";
 
 export type {
   DecideIdempotencyInput,

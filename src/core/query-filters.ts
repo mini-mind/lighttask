@@ -1,168 +1,85 @@
-import { readMaterializedTaskProvenance } from "./materialized-task-governance";
-import { resolveTaskDesignStatus, resolveTaskExecutionStatus } from "./task-snapshot";
 import type {
   ListOutputsInput,
   ListRuntimesInput,
   ListTasksInput,
-  OutputRefQuery,
   PersistedLightOutput,
   PersistedLightRuntime,
   PersistedLightTask,
-  RuntimeRefQuery,
 } from "./types";
 
 function matchesStatus<TStatus extends string>(
-  status: TStatus,
-  filter: TStatus | { in: TStatus[] } | undefined,
+  actual: TStatus,
+  expected: TStatus | { in: TStatus[] } | undefined,
 ): boolean {
-  if (!filter) {
+  if (expected === undefined) {
     return true;
   }
-
-  if (typeof filter === "string") {
-    return status === filter;
+  if (typeof expected === "string") {
+    return actual === expected;
   }
-
-  return filter.in.includes(status);
+  return expected.in.includes(actual);
 }
 
-function matchesRef(
-  candidate:
-    | {
-        kind: string;
-        id: string;
-      }
-    | undefined,
-  filter: RuntimeRefQuery | OutputRefQuery | undefined,
-): boolean {
-  if (!filter) {
-    return true;
-  }
-
-  return candidate?.kind === filter.kind && candidate.id === filter.id;
-}
-
-function matchesRuntimeRef(
-  candidate:
-    | {
-        id: string;
-      }
-    | undefined,
-  filter:
-    | {
-        id: string;
-      }
-    | undefined,
-): boolean {
-  if (!filter) {
-    return true;
-  }
-
-  return candidate?.id === filter.id;
-}
-
-export function shouldIncludeTask(task: PersistedLightTask, input: ListTasksInput = {}): boolean {
-  if (input.planId && task.planId !== input.planId) {
+export function shouldIncludeTask(task: PersistedLightTask, input: ListTasksInput): boolean {
+  if (input.planId !== undefined && task.planId !== input.planId.trim()) {
     return false;
   }
-
-  if (!matchesStatus(resolveTaskExecutionStatus(task), input.executionStatus)) {
-    return false;
-  }
-
-  if (!matchesStatus(resolveTaskDesignStatus(task.designStatus), input.designStatus)) {
-    return false;
-  }
-
-  const provenance = readMaterializedTaskProvenance(task);
-  if (!input.includeOrphaned && provenance?.governance?.state === "orphaned") {
-    return false;
-  }
-
-  if (!input.materializedSource) {
-    return true;
-  }
-
-  if (!provenance) {
-    return false;
-  }
-
-  if (
-    input.materializedSource.nodeId &&
-    provenance.source.nodeId !== input.materializedSource.nodeId
-  ) {
-    return false;
-  }
-  if (
-    input.materializedSource.nodeTaskId &&
-    provenance.source.nodeTaskId !== input.materializedSource.nodeTaskId
-  ) {
-    return false;
-  }
-  if (
-    input.materializedSource.graphRevision !== undefined &&
-    provenance.source.graphRevision !== input.materializedSource.graphRevision
-  ) {
-    return false;
-  }
-  if (
-    input.materializedSource.governanceState &&
-    provenance.governance?.state !== input.materializedSource.governanceState
-  ) {
-    return false;
-  }
-
-  return true;
+  return matchesStatus(task.status, input.status);
 }
 
 export function shouldIncludeRuntime(
   runtime: PersistedLightRuntime,
-  input: ListRuntimesInput = {},
+  input: ListRuntimesInput,
 ): boolean {
-  if (input.kind && runtime.kind !== input.kind) {
+  if (input.kind !== undefined && runtime.kind !== input.kind.trim()) {
     return false;
   }
-
   if (!matchesStatus(runtime.status, input.status)) {
     return false;
   }
-
-  if (!matchesRef(runtime.ownerRef, input.ownerRef)) {
+  if (
+    input.ownerRef &&
+    (runtime.ownerRef?.kind !== input.ownerRef.kind || runtime.ownerRef?.id !== input.ownerRef.id)
+  ) {
     return false;
   }
-
-  if (!matchesRef(runtime.parentRef, input.parentRef)) {
+  if (
+    input.parentRef &&
+    (runtime.parentRef?.kind !== input.parentRef.kind ||
+      runtime.parentRef?.id !== input.parentRef.id)
+  ) {
     return false;
   }
-
-  if (input.relatedRef) {
-    return (
-      runtime.relatedRefs?.some((relatedRef) => matchesRef(relatedRef, input.relatedRef)) ?? false
-    );
+  if (
+    input.relatedRef &&
+    !(runtime.relatedRefs ?? []).some(
+      (relatedRef) =>
+        relatedRef.kind === input.relatedRef?.kind && relatedRef.id === input.relatedRef?.id,
+    )
+  ) {
+    return false;
   }
-
   return true;
 }
 
 export function shouldIncludeOutput(
   output: PersistedLightOutput,
-  input: ListOutputsInput = {},
+  input: ListOutputsInput,
 ): boolean {
-  if (input.kind && output.kind !== input.kind) {
+  if (input.kind !== undefined && output.kind !== input.kind.trim()) {
     return false;
   }
-
   if (!matchesStatus(output.status, input.status)) {
     return false;
   }
-
-  if (!matchesRef(output.ownerRef, input.ownerRef)) {
+  if (input.runtimeRef && output.runtimeRef?.id !== input.runtimeRef.id) {
     return false;
   }
-
-  if (input.runtimeRef) {
-    return matchesRuntimeRef(output.runtimeRef, input.runtimeRef);
+  if (
+    input.ownerRef &&
+    (output.ownerRef?.kind !== input.ownerRef.kind || output.ownerRef?.id !== input.ownerRef.id)
+  ) {
+    return false;
   }
-
   return true;
 }

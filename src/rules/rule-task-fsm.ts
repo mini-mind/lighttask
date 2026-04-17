@@ -1,16 +1,25 @@
 import {
   type CoreError,
   DEFAULT_TASK_TERMINAL_STATUSES,
-  type TaskLifecycleStatus,
+  type TaskStatus,
   createCoreError,
 } from "../data-structures";
 
-export type TaskAction = string;
+export type TaskAction =
+  | "finalize"
+  | "return_to_draft"
+  | "dispatch"
+  | "start"
+  | "request_approval"
+  | "approve"
+  | "complete"
+  | "fail"
+  | "cancel";
 
 export type TaskTransitionResult =
   | {
       ok: true;
-      status: TaskLifecycleStatus;
+      status: TaskStatus;
     }
   | {
       ok: false;
@@ -20,38 +29,35 @@ export type TaskTransitionResult =
 export type TaskStepProgressPolicy = "none" | "advance_one" | "complete_all";
 
 export interface TaskLifecyclePolicy {
-  initialStatus: TaskLifecycleStatus;
-  isTerminal(status: TaskLifecycleStatus): boolean;
-  canTransition(currentStatus: TaskLifecycleStatus, action: TaskAction): boolean;
-  getNextStatus(
-    currentStatus: TaskLifecycleStatus,
-    action: TaskAction,
-  ): TaskLifecycleStatus | undefined;
-  transition(currentStatus: TaskLifecycleStatus, action: TaskAction): TaskTransitionResult;
-  listActions(currentStatus: TaskLifecycleStatus): TaskAction[];
-  selectDefaultAction(currentStatus: TaskLifecycleStatus): TaskAction | undefined;
+  initialStatus: TaskStatus;
+  isTerminal(status: TaskStatus): boolean;
+  canTransition(currentStatus: TaskStatus, action: TaskAction): boolean;
+  getNextStatus(currentStatus: TaskStatus, action: TaskAction): TaskStatus | undefined;
+  transition(currentStatus: TaskStatus, action: TaskAction): TaskTransitionResult;
+  listActions(currentStatus: TaskStatus): TaskAction[];
   resolveStepProgress(action: TaskAction): TaskStepProgressPolicy;
 }
 
 export interface CreateTaskLifecyclePolicyInput {
-  initialStatus: TaskLifecycleStatus;
-  transitionTable: Readonly<
-    Record<TaskLifecycleStatus, Readonly<Partial<Record<TaskAction, TaskLifecycleStatus>>>>
-  >;
-  terminalStatuses: readonly TaskLifecycleStatus[];
-  defaultActionPriority?: readonly TaskAction[];
+  initialStatus: TaskStatus;
+  transitionTable: Readonly<Record<TaskStatus, Readonly<Partial<Record<TaskAction, TaskStatus>>>>>;
+  terminalStatuses: readonly TaskStatus[];
   stepProgressByAction?: Readonly<Partial<Record<TaskAction, TaskStepProgressPolicy>>>;
   validateTransition?: (input: {
-    currentStatus: TaskLifecycleStatus;
+    currentStatus: TaskStatus;
     action: TaskAction;
-    nextStatus: TaskLifecycleStatus;
+    nextStatus: TaskStatus;
   }) => CoreError | undefined;
 }
 
 const TASK_TRANSITION_TABLE: Readonly<
-  Record<TaskLifecycleStatus, Readonly<Partial<Record<TaskAction, TaskLifecycleStatus>>>>
+  Record<TaskStatus, Readonly<Partial<Record<TaskAction, TaskStatus>>>>
 > = {
-  queued: {
+  draft: {
+    finalize: "todo",
+  },
+  todo: {
+    return_to_draft: "draft",
     dispatch: "dispatched",
     fail: "failed",
     cancel: "cancelled",
@@ -77,17 +83,9 @@ const TASK_TRANSITION_TABLE: Readonly<
   cancelled: {},
 } as const;
 
-const DEFAULT_TASK_ACTION_PRIORITY: readonly TaskAction[] = [
-  "dispatch",
-  "start",
-  "complete",
-  "approve",
-  "request_approval",
-  "fail",
-  "cancel",
-];
-
 const DEFAULT_TASK_STEP_PROGRESS_BY_ACTION = {
+  finalize: "none",
+  return_to_draft: "none",
   dispatch: "advance_one",
   start: "advance_one",
   complete: "complete_all",
@@ -98,26 +96,19 @@ export function createTaskLifecyclePolicy(
 ): TaskLifecyclePolicy {
   const terminalStatuses = new Set(input.terminalStatuses);
 
-  function isTerminal(status: TaskLifecycleStatus): boolean {
+  function isTerminal(status: TaskStatus): boolean {
     return terminalStatuses.has(status);
   }
 
-  function getNextStatus(
-    currentStatus: TaskLifecycleStatus,
-    action: TaskAction,
-  ): TaskLifecycleStatus | undefined {
+  function getNextStatus(currentStatus: TaskStatus, action: TaskAction): TaskStatus | undefined {
     if (isTerminal(currentStatus)) {
       return undefined;
     }
 
-    // 规则层 FSM 必须保持纯函数：所有迁移仅由显式配置定义，不读取外部状态。
     return input.transitionTable[currentStatus]?.[action];
   }
 
-  function transition(
-    currentStatus: TaskLifecycleStatus,
-    action: TaskAction,
-  ): TaskTransitionResult {
+  function transition(currentStatus: TaskStatus, action: TaskAction): TaskTransitionResult {
     const nextStatus = getNextStatus(currentStatus, action);
     if (nextStatus === undefined) {
       return {
@@ -147,20 +138,12 @@ export function createTaskLifecyclePolicy(
     };
   }
 
-  function listActions(currentStatus: TaskLifecycleStatus): TaskAction[] {
+  function listActions(currentStatus: TaskStatus): TaskAction[] {
     if (isTerminal(currentStatus)) {
       return [];
     }
 
-    return Object.keys(input.transitionTable[currentStatus] ?? {});
-  }
-
-  function selectDefaultAction(currentStatus: TaskLifecycleStatus): TaskAction | undefined {
-    const actionPriority = input.defaultActionPriority ?? [];
-    return (
-      actionPriority.find((action) => getNextStatus(currentStatus, action) !== undefined) ??
-      listActions(currentStatus)[0]
-    );
+    return Object.keys(input.transitionTable[currentStatus] ?? {}) as TaskAction[];
   }
 
   return {
@@ -172,7 +155,6 @@ export function createTaskLifecyclePolicy(
     getNextStatus,
     transition,
     listActions,
-    selectDefaultAction,
     resolveStepProgress(action) {
       return input.stepProgressByAction?.[action] ?? "none";
     },
@@ -180,39 +162,32 @@ export function createTaskLifecyclePolicy(
 }
 
 export const defaultTaskLifecyclePolicy = createTaskLifecyclePolicy({
-  initialStatus: "queued",
+  initialStatus: "draft",
   transitionTable: TASK_TRANSITION_TABLE,
   terminalStatuses: DEFAULT_TASK_TERMINAL_STATUSES,
-  defaultActionPriority: DEFAULT_TASK_ACTION_PRIORITY,
   stepProgressByAction: DEFAULT_TASK_STEP_PROGRESS_BY_ACTION,
 });
 
-export function canTaskTransition(currentStatus: TaskLifecycleStatus, action: TaskAction): boolean {
+export function canTaskTransition(currentStatus: TaskStatus, action: TaskAction): boolean {
   return defaultTaskLifecyclePolicy.canTransition(currentStatus, action);
 }
 
 export function getNextTaskStatus(
-  currentStatus: TaskLifecycleStatus,
+  currentStatus: TaskStatus,
   action: TaskAction,
-): TaskLifecycleStatus | undefined {
+): TaskStatus | undefined {
   return defaultTaskLifecyclePolicy.getNextStatus(currentStatus, action);
 }
 
 export function transitionTaskStatus(
-  currentStatus: TaskLifecycleStatus,
+  currentStatus: TaskStatus,
   action: TaskAction,
 ): TaskTransitionResult {
   return defaultTaskLifecyclePolicy.transition(currentStatus, action);
 }
 
-export function listTaskActions(currentStatus: TaskLifecycleStatus): TaskAction[] {
+export function listTaskActions(currentStatus: TaskStatus): TaskAction[] {
   return defaultTaskLifecyclePolicy.listActions(currentStatus);
-}
-
-export function selectDefaultTaskAction(
-  currentStatus: TaskLifecycleStatus,
-): TaskAction | undefined {
-  return defaultTaskLifecyclePolicy.selectDefaultAction(currentStatus);
 }
 
 export function resolveTaskStepProgress(action: TaskAction): TaskStepProgressPolicy {

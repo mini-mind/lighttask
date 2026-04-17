@@ -1,7 +1,6 @@
 import { bumpRevision } from "../data-structures";
-import { assertExpectedRevision, assertNextRevision } from "../rules";
+import { assertExpectedRevision, decideIdempotency, defaultRuntimeLifecyclePolicy } from "../rules";
 import { cloneOptional } from "./clone";
-import { resolveRuntimeLifecyclePolicy } from "./lifecycle-policy";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -16,43 +15,13 @@ import type {
   PersistedLightRuntime,
 } from "./types";
 
-function assertRuntimeId(runtimeId: string): string {
-  const normalizedRuntimeId = runtimeId.trim();
-
-  if (!normalizedRuntimeId) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 ID 不能为空", {
-        runtimeId,
-      }),
-    );
-  }
-
-  return normalizedRuntimeId;
-}
-
-const RELATIONSHIP_FIELDS = ["parentRef", "ownerRef", "relatedRefs"] as const;
-
-function hasOwnField(record: Record<string, unknown>, fieldName: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, fieldName);
-}
-
-function assertNoRelationshipMutation(runtimeId: string, input: AdvanceRuntimeInput): void {
-  const inputRecord = input as unknown as Record<string, unknown>;
-  const attemptedFields = RELATIONSHIP_FIELDS.filter((fieldName) => {
-    return hasOwnField(inputRecord, fieldName);
+function buildAdvanceRuntimeFingerprint(runtimeId: string, input: AdvanceRuntimeInput): string {
+  return JSON.stringify({
+    runtimeId,
+    action: input.action,
+    expectedRevision: input.expectedRevision,
+    result: input.result ?? null,
   });
-
-  if (attemptedFields.length === 0) {
-    return;
-  }
-
-  // 关系字段只允许在创建时写入，推进阶段保持只读，避免 runtime 膨胀成通用关系子系统。
-  throwLightTaskError(
-    createLightTaskError("VALIDATION_ERROR", "advanceRuntime 不允许修改关系字段", {
-      runtimeId,
-      fields: attemptedFields,
-    }),
-  );
 }
 
 export function advanceRuntimeUseCase(
@@ -61,7 +30,7 @@ export function advanceRuntimeUseCase(
   input: AdvanceRuntimeInput,
 ): LightTaskRuntime {
   const publishEvent = resolveNotifyPublisher(options);
-  const runtimeLifecycle = resolveRuntimeLifecyclePolicy(options);
+  const runtimeLifecycle = options.runtimeLifecycle ?? defaultRuntimeLifecyclePolicy;
   const getRuntime = requireLightTaskFunction(
     options.runtimeRepository?.get,
     "runtimeRepository.get",
@@ -71,61 +40,64 @@ export function advanceRuntimeUseCase(
     "runtimeRepository.saveIfRevisionMatches",
   );
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
-  const normalizedRuntimeId = assertRuntimeId(runtimeId);
-  const storedRuntime = getRuntime(normalizedRuntimeId);
+  const normalizedRuntimeId = runtimeId.trim();
+  if (!normalizedRuntimeId) {
+    throwLightTaskError(
+      createLightTaskError("VALIDATION_ERROR", "运行时 ID 不能为空", { runtimeId }),
+    );
+  }
 
+  const storedRuntime = getRuntime(normalizedRuntimeId);
   if (!storedRuntime) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到运行时", {
-        runtimeId: normalizedRuntimeId,
-      }),
+      createLightTaskError("NOT_FOUND", "未找到运行时", { runtimeId: normalizedRuntimeId }),
     );
   }
 
-  if (input.expectedRevision === undefined) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "expectedRevision 为必填字段", {
-        runtimeId: normalizedRuntimeId,
-      }),
-    );
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const fingerprint = buildAdvanceRuntimeFingerprint(normalizedRuntimeId, input);
+  const idempotencyDecision = decideIdempotency({
+    incomingIdempotencyKey: normalizedIdempotencyKey,
+    storedIdempotencyKey: storedRuntime.idempotencyKey,
+    incomingFingerprint: fingerprint,
+    storedFingerprint: storedRuntime.lastAdvanceFingerprint,
+  });
+  if (idempotencyDecision.decision === "replay") {
+    return toPublicRuntime(storedRuntime);
+  }
+  if (idempotencyDecision.decision === "conflict" && idempotencyDecision.error) {
+    throwLightTaskError(idempotencyDecision.error);
   }
 
-  assertNoRelationshipMutation(normalizedRuntimeId, input);
-
-  const runtime = clonePersistedRuntime(storedRuntime);
-  const action = input.action ?? runtimeLifecycle.selectDefaultAction(runtime.status);
-
+  assertExpectedRevision(storedRuntime.revision, input.expectedRevision);
+  const action = input.action ?? runtimeLifecycle.selectDefaultAction(storedRuntime.status);
   if (!action) {
     throwLightTaskError(
       createLightTaskError("STATE_CONFLICT", "当前运行时没有可推进动作", {
         runtimeId: normalizedRuntimeId,
-        currentStatus: runtime.status,
+        currentStatus: storedRuntime.status,
       }),
     );
   }
 
-  assertExpectedRevision(runtime.revision, input.expectedRevision);
-  assertNextRevision(runtime.revision, runtime.revision + 1);
-
-  const transition = runtimeLifecycle.transition(runtime.status, action);
+  const transition = runtimeLifecycle.transition(storedRuntime.status, action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }
 
-  const nextRevision = bumpRevision(runtime, clockNow(), runtime.idempotencyKey);
+  const nextRevision = bumpRevision(storedRuntime, clockNow(), normalizedIdempotencyKey);
   const nextRuntime: PersistedLightRuntime = {
-    ...runtime,
+    ...clonePersistedRuntime(storedRuntime),
     status: transition.status,
-    // 首切片只允许在推进时携带结果快照，不在这里引入额外策略字段。
-    result: hasOwnField(input as unknown as Record<string, unknown>, "result")
+    result: Object.prototype.hasOwnProperty.call(input, "result")
       ? cloneOptional(input.result ?? undefined)
-      : runtime.result,
+      : storedRuntime.result,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,
+    lastAdvanceFingerprint: fingerprint,
   };
   const saved = saveIfRevisionMatches(nextRuntime, storedRuntime.revision);
-
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }

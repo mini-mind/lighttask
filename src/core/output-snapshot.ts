@@ -6,5 +6,10 @@ export function clonePersistedOutput(output: PersistedLightOutput): PersistedLig
 }
 
 export function toPublicOutput(output: PersistedLightOutput): LightTaskOutput {
-  return clonePersistedOutput(output);
+  const {
+    lastCreateFingerprint: _lastCreateFingerprint,
+    lastAdvanceFingerprint: _lastAdvanceFingerprint,
+    ...publicOutput
+  } = output;
+  return cloneValue(publicOutput);
 }

@@ -4,7 +4,7 @@ import {
   type RuntimeRelatedRef,
   createRuntimeRecord,
 } from "../data-structures";
-import { resolveRuntimeLifecyclePolicy } from "./lifecycle-policy";
+import { defaultRuntimeLifecyclePolicy } from "../rules";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -29,29 +29,11 @@ function normalizeRuntimeRelationRef<TRef extends RuntimeRelationRef>(
     return undefined;
   }
 
-  if (typeof ref !== "object" || ref === null || Array.isArray(ref)) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName} 只允许对象引用`, {
-        [fieldName]: ref,
-      }),
-    );
-  }
-
   const kind = typeof ref.kind === "string" ? ref.kind.trim() : "";
   const id = typeof ref.id === "string" ? ref.id.trim() : "";
-
-  // runtime 关系切片只承担稳定关系标识，不在这里引入跨聚合查验或更复杂语义。
-  if (!kind) {
+  if (!kind || !id) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName}.kind 不能为空`, {
-        [fieldName]: ref,
-      }),
-    );
-  }
-
-  if (!id) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", `运行时 ${fieldName}.id 不能为空`, {
+      createLightTaskError("VALIDATION_ERROR", `${fieldName} 必须包含非空 kind/id`, {
         [fieldName]: ref,
       }),
     );
@@ -70,28 +52,19 @@ function normalizeRuntimeRelatedRefs(
   if (relatedRefs === undefined) {
     return undefined;
   }
-
   if (!Array.isArray(relatedRefs)) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 relatedRefs 必须是数组", {
-        relatedRefs,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "relatedRefs 必须是数组", { relatedRefs }),
     );
   }
-
-  // relatedRefs 仅提供 create-only 的补充关系表达，不在运行时聚合内扩展查询语义。
   return relatedRefs.map((relatedRef, index) => {
-    const normalizedRelatedRef = normalizeRuntimeRelationRef(`relatedRefs[${index}]`, relatedRef);
-
-    if (!normalizedRelatedRef) {
+    const normalizedRef = normalizeRuntimeRelationRef(`relatedRefs[${index}]`, relatedRef);
+    if (!normalizedRef) {
       throwLightTaskError(
-        createLightTaskError("VALIDATION_ERROR", `运行时 relatedRefs[${index}] 不能为空`, {
-          relatedRef,
-        }),
+        createLightTaskError("VALIDATION_ERROR", "relatedRefs 不能为空", { relatedRef, index }),
       );
     }
-
-    return normalizedRelatedRef;
+    return normalizedRef;
   });
 }
 
@@ -100,8 +73,12 @@ export function createRuntimeUseCase(
   input: CreateRuntimeInput,
 ): LightTaskRuntime {
   const publishEvent = resolveNotifyPublisher(options);
-  const runtimeLifecycle = resolveRuntimeLifecyclePolicy(options);
+  const runtimeLifecycle = options.runtimeLifecycle ?? defaultRuntimeLifecyclePolicy;
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const getRuntime = requireLightTaskFunction(
+    options.runtimeRepository?.get,
+    "runtimeRepository.get",
+  );
   const createRuntime = requireLightTaskFunction(
     options.runtimeRepository?.create,
     "runtimeRepository.create",
@@ -109,50 +86,72 @@ export function createRuntimeUseCase(
   const runtimeId = input.id.trim();
   const kind = input.kind.trim();
   const title = input.title.trim();
-
   if (!runtimeId) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 ID 不能为空", {
-        runtimeId: input.id,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "运行时 ID 不能为空", { runtimeId: input.id }),
     );
   }
-
   if (!kind) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时 kind 不能为空", {
-        kind: input.kind,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "运行时 kind 不能为空", { kind: input.kind }),
     );
   }
-
   if (!title) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "运行时标题不能为空", {
-        title: input.title,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "运行时标题不能为空", { title: input.title }),
     );
   }
 
-  const parentRef = normalizeRuntimeRelationRef("parentRef", input.parentRef);
-  const ownerRef = normalizeRuntimeRelationRef("ownerRef", input.ownerRef);
-  const relatedRefs = normalizeRuntimeRelatedRefs(input.relatedRefs);
-  const runtime: PersistedLightRuntime = createRuntimeRecord({
+  const fingerprint = JSON.stringify({
     id: runtimeId,
     kind,
     title,
-    createdAt: clockNow(),
-    status: runtimeLifecycle.initialStatus,
-    parentRef,
-    ownerRef,
-    relatedRefs,
+    parentRef: input.parentRef,
+    ownerRef: input.ownerRef,
+    relatedRefs: input.relatedRefs,
     context: input.context,
     result: input.result,
     metadata: input.metadata,
     extensions: input.extensions,
   });
-  const created = createRuntime(runtime);
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const existed = getRuntime(runtimeId);
+  if (existed && normalizedIdempotencyKey && existed.idempotencyKey === normalizedIdempotencyKey) {
+    if (existed.lastCreateFingerprint === fingerprint) {
+      return toPublicRuntime(existed);
+    }
+    throwLightTaskError(
+      createLightTaskError(
+        "STATE_CONFLICT",
+        "相同 idempotencyKey 对应的请求内容不一致，拒绝处理。",
+        {
+          idempotencyKey: normalizedIdempotencyKey,
+          incomingFingerprint: fingerprint,
+          storedFingerprint: existed.lastCreateFingerprint,
+        },
+      ),
+    );
+  }
 
+  const runtime: PersistedLightRuntime = {
+    ...createRuntimeRecord({
+      id: runtimeId,
+      kind,
+      title,
+      createdAt: clockNow(),
+      status: runtimeLifecycle.initialStatus,
+      parentRef: normalizeRuntimeRelationRef("parentRef", input.parentRef),
+      ownerRef: normalizeRuntimeRelationRef("ownerRef", input.ownerRef),
+      relatedRefs: normalizeRuntimeRelatedRefs(input.relatedRefs),
+      context: input.context,
+      result: input.result,
+      metadata: input.metadata,
+      extensions: input.extensions,
+      idempotencyKey: normalizedIdempotencyKey,
+    }),
+    lastCreateFingerprint: fingerprint,
+  };
+  const created = createRuntime(runtime);
   if (!created.ok) {
     throwLightTaskError(created.error);
   }

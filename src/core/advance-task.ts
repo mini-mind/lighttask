@@ -1,28 +1,47 @@
 import { bumpRevision } from "../data-structures";
-import { assertExpectedRevision, assertNextRevision, decideIdempotency } from "../rules";
-import { resolveTaskLifecyclePolicy } from "./lifecycle-policy";
+import { assertExpectedRevision, transitionTaskStatus } from "../rules";
+import { decideIdempotency } from "../rules";
 import {
   createLightTaskError,
   requireLightTaskFunction,
   throwLightTaskError,
 } from "./lighttask-error";
 import { publishTaskAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
+import { buildPlanSchedulingFacts } from "./task-dependency-snapshot";
 import { applyTaskStepProgress } from "./task-progress";
-import { buildAdvanceFingerprint, clonePersistedTask, toPublicTask } from "./task-snapshot";
-import type { AdvanceTaskInput, CreateLightTaskOptions, LightTaskTask } from "./types";
+import { clonePersistedTask, toPublicTask } from "./task-snapshot";
+import type {
+  AdvanceTaskInput,
+  CreateLightTaskOptions,
+  LightTaskTask,
+  PersistedLightTask,
+} from "./types";
 
-function assertTaskId(taskId: string): string {
-  const normalizedTaskId = taskId.trim();
+function buildAdvanceTaskFingerprint(taskId: string, input: AdvanceTaskInput): string {
+  return JSON.stringify({
+    taskId,
+    action: input.action,
+    expectedRevision: input.expectedRevision,
+  });
+}
 
-  if (!normalizedTaskId) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", {
-        taskId,
-      }),
-    );
+function assertTaskActionAllowed(
+  task: PersistedLightTask,
+  input: AdvanceTaskInput,
+  allTasks: PersistedLightTask[],
+): void {
+  if (input.action === "dispatch") {
+    const facts = buildPlanSchedulingFacts(task.planId, allTasks);
+    if (!facts.byTaskId[task.id]?.isRunnable) {
+      throwLightTaskError(
+        createLightTaskError("STATE_CONFLICT", "dispatch 只允许推进当前 runnable 任务", {
+          taskId: task.id,
+          currentStatus: task.status,
+          blockReasonCodes: facts.byTaskId[task.id]?.blockReasonCodes ?? [],
+        }),
+      );
+    }
   }
-
-  return normalizedTaskId;
 }
 
 export function advanceTaskUseCase(
@@ -31,101 +50,63 @@ export function advanceTaskUseCase(
   input: AdvanceTaskInput,
 ): LightTaskTask {
   const publishEvent = resolveNotifyPublisher(options);
-  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const getTask = requireLightTaskFunction(options.taskRepository?.get, "taskRepository.get");
+  const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
   const saveIfRevisionMatches = requireLightTaskFunction(
     options.taskRepository?.saveIfRevisionMatches,
     "taskRepository.saveIfRevisionMatches",
   );
-  const normalizedTaskId = assertTaskId(taskId);
+  const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const normalizedTaskId = taskId.trim();
+  if (!normalizedTaskId) {
+    throwLightTaskError(createLightTaskError("VALIDATION_ERROR", "任务 ID 不能为空", { taskId }));
+  }
+
   const storedTask = getTask(normalizedTaskId);
   if (!storedTask) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到任务", {
-        taskId: normalizedTaskId,
-      }),
+      createLightTaskError("NOT_FOUND", "未找到任务", { taskId: normalizedTaskId }),
     );
   }
 
-  const task = clonePersistedTask(storedTask);
-  if (input.expectedRevision === undefined) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "expectedRevision 为必填字段", {
-        taskId: normalizedTaskId,
-      }),
-    );
-  }
-
-  if (task.designStatus !== "ready") {
-    throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "当前任务未处于 ready 设计态，不能推进执行状态", {
-        taskId: normalizedTaskId,
-        currentDesignStatus: task.designStatus,
-      }),
-    );
-  }
-
-  const action = input.action ?? taskLifecycle.selectDefaultAction(task.executionStatus);
-  if (!action) {
-    throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "任务没有可推进的进行中阶段", {
-        taskId: normalizedTaskId,
-        currentStatus: task.executionStatus,
-      }),
-    );
-  }
-
-  const expectedRevision = input.expectedRevision;
-  const incomingFingerprint = buildAdvanceFingerprint(task.id, action, expectedRevision);
-  // 先判定幂等语义，再进入 revision 与状态迁移，避免重复请求污染状态。
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const fingerprint = buildAdvanceTaskFingerprint(normalizedTaskId, input);
   const idempotencyDecision = decideIdempotency({
-    incomingIdempotencyKey: input.idempotencyKey,
-    storedIdempotencyKey: task.idempotencyKey,
-    incomingFingerprint,
-    storedFingerprint: task.lastAdvanceFingerprint,
+    incomingIdempotencyKey: normalizedIdempotencyKey,
+    storedIdempotencyKey: storedTask.idempotencyKey,
+    incomingFingerprint: fingerprint,
+    storedFingerprint: storedTask.lastAdvanceFingerprint,
   });
-  if (idempotencyDecision.decision === "conflict") {
-    throwLightTaskError(
-      idempotencyDecision.error ??
-        createLightTaskError("STATE_CONFLICT", idempotencyDecision.reason, {
-          taskId: normalizedTaskId,
-        }),
-    );
-  }
   if (idempotencyDecision.decision === "replay") {
-    return toPublicTask(task);
+    return toPublicTask(storedTask);
+  }
+  if (idempotencyDecision.decision === "conflict" && idempotencyDecision.error) {
+    throwLightTaskError(idempotencyDecision.error);
   }
 
-  const nextRevision = bumpRevision(
-    {
-      revision: task.revision,
-      updatedAt: task.updatedAt ?? task.createdAt,
-      idempotencyKey: task.idempotencyKey,
-    },
-    options.clock?.now?.() ?? task.updatedAt ?? task.createdAt,
-    input.idempotencyKey?.trim() || task.idempotencyKey,
-  );
-  assertExpectedRevision(task.revision, expectedRevision);
-  assertNextRevision(task.revision, nextRevision.revision);
+  assertExpectedRevision(storedTask.revision, input.expectedRevision);
+  assertTaskActionAllowed(storedTask, input, listTasks());
 
-  const transition = taskLifecycle.transition(task.executionStatus, action);
+  const transition = transitionTaskStatus(storedTask.status, input.action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }
 
-  task.executionStatus = transition.status;
-  task.revision = nextRevision.revision;
-  task.updatedAt = nextRevision.updatedAt;
-  task.idempotencyKey = nextRevision.idempotencyKey;
-  task.lastAdvanceFingerprint = incomingFingerprint;
-  applyTaskStepProgress(task, action, taskLifecycle);
-
-  const saved = saveIfRevisionMatches(task, storedTask.revision);
+  const nextRevision = bumpRevision(storedTask, clockNow(), normalizedIdempotencyKey);
+  const nextTask: PersistedLightTask = {
+    ...clonePersistedTask(storedTask),
+    status: transition.status,
+    steps: applyTaskStepProgress(storedTask.steps, input.action),
+    revision: nextRevision.revision,
+    updatedAt: nextRevision.updatedAt,
+    idempotencyKey: nextRevision.idempotencyKey,
+    lastAdvanceFingerprint: fingerprint,
+  };
+  const saved = saveIfRevisionMatches(nextTask, storedTask.revision);
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }
 
-  // 保存成功后统一返回仓储权威快照，避免内存中间态与持久化结果漂移。
   const publicTask = toPublicTask(saved.task);
   publishTaskAdvancedEvent(publishEvent, publicTask);
   return publicTask;

@@ -1,530 +1,80 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LightTaskError, type LightTaskOutput, createLightTask } from "../index";
-import { assertInvalidDependencyCases, createTestLightTaskOptions } from "./ports-fixture";
+import { LightTaskError } from "../index";
+import { createTestLightTask } from "./ports-fixture";
 
-test("LightTask Output API 支持创建、读取、列出与推进输出", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-
+test("Output API：支持创建、封口和过滤查询", () => {
+  const { lighttask } = createTestLightTask();
   const output = lighttask.createOutput({
-    id: " output_alpha ",
-    kind: " summary ",
-    runtimeRef: {
-      id: " runtime_missing_but_allowed ",
-    },
-    ownerRef: {
-      kind: " task ",
-      id: " task_alpha ",
-    },
+    id: "output_1",
+    kind: "artifact",
     payload: {
-      text: "draft",
-    },
-    items: [
-      {
-        id: " artifact_text ",
-        kind: " text ",
-        role: " final ",
-        label: " 摘要正文 ",
-        contentType: " text/plain ",
-        schema: " summary.v1 ",
-        metadata: {
-          size: 10,
-        },
-        extensions: {
-          namespaces: { outputItem: { lane: "primary" } },
-        },
-      },
-      {
-        id: "artifact_json",
-        kind: "structured",
-        status: " ready ",
-      },
-    ],
-    metadata: {
-      owner: { name: "tester" },
-    },
-    extensions: {
-      properties: { priority: "p1" },
-      namespaces: { output: { lane: "core" } },
+      ok: true,
     },
   });
-
-  assert.equal(output.id, "output_alpha");
-  assert.equal(output.kind, "summary");
   assert.equal(output.status, "open");
-  assert.equal(output.revision, 1);
-  assert.deepEqual(output.runtimeRef, {
-    id: "runtime_missing_but_allowed",
-  });
-  assert.deepEqual(output.ownerRef, {
-    kind: "task",
-    id: "task_alpha",
-  });
-  assert.deepEqual(output.payload, {
-    text: "draft",
-  });
-  assert.deepEqual(output.items, [
-    {
-      id: "artifact_text",
-      kind: "text",
-      status: "declared",
-      role: "final",
-      label: "摘要正文",
-      contentType: "text/plain",
-      schema: "summary.v1",
-      metadata: {
-        size: 10,
-      },
-      extensions: {
-        namespaces: { outputItem: { lane: "primary" } },
-      },
-    },
-    {
-      id: "artifact_json",
-      kind: "structured",
-      status: "ready",
-    },
-  ]);
 
-  const fetched = lighttask.getOutput("output_alpha");
-  assert.ok(fetched);
-  assert.equal(fetched.kind, "summary");
-  assert.deepEqual(fetched.runtimeRef, {
-    id: "runtime_missing_but_allowed",
-  });
-  assert.deepEqual(fetched.items, output.items);
-
-  const listed = lighttask.listOutputs();
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].id, "output_alpha");
-  assert.deepEqual(listed[0].items, output.items);
-
-  const revised = lighttask.advanceOutput("output_alpha", {
-    expectedRevision: 1,
-    status: "open",
+  const sealed = lighttask.advanceOutput(output.id, {
+    expectedRevision: output.revision,
     payload: {
-      text: "draft v2",
+      ok: true,
+      sealed: true,
     },
-    items: [
-      {
-        id: " artifact_markdown ",
-        kind: " text ",
-        role: " preview ",
-      },
-    ],
-  });
-  assert.equal(revised.status, "open");
-  assert.equal(revised.revision, 2);
-  assert.deepEqual(revised.payload, {
-    text: "draft v2",
-  });
-  assert.deepEqual(revised.items, [
-    {
-      id: "artifact_markdown",
-      kind: "text",
-      status: "declared",
-      role: "preview",
-    },
-  ]);
-
-  const sealed = lighttask.advanceOutput("output_alpha", {
-    expectedRevision: 2,
   });
   assert.equal(sealed.status, "sealed");
-  assert.equal(sealed.revision, 3);
-  assert.deepEqual(sealed.ownerRef, {
-    kind: "task",
-    id: "task_alpha",
-  });
-  assert.deepEqual(sealed.payload, {
-    text: "draft v2",
-  });
-  assert.deepEqual(sealed.items, revised.items);
+  assert.deepEqual(
+    lighttask
+      .listOutputs({
+        status: "sealed",
+      })
+      .map((item) => item.id),
+    ["output_1"],
+  );
 });
 
-test("LightTask Output API 返回快照并与内部状态隔离", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
+test("Output API：上一次带 key，这一次不带 key 仍应按新请求处理", () => {
+  const { lighttask } = createTestLightTask();
   const output = lighttask.createOutput({
-    id: "output_snapshot",
-    kind: "report",
-    runtimeRef: {
-      id: "runtime_1",
-    },
-    ownerRef: {
-      kind: "plan",
-      id: "plan_snapshot",
-    },
+    id: "output_no_key_pollution",
+    kind: "artifact",
+  });
+  const stillOpen = lighttask.advanceOutput(output.id, {
+    expectedRevision: output.revision,
+    status: "open",
     payload: {
-      content: { text: "draft" },
+      step: 1,
     },
-    items: [
-      {
-        id: "artifact_snapshot",
-        kind: "text",
-        metadata: {
-          owner: { name: "tester" },
-        },
-        extensions: {
-          namespaces: { outputItem: { lane: "snapshot" } },
-        },
-      },
-    ],
-    metadata: {
-      owner: { name: "tester" },
-    },
-    extensions: {
-      presentation: { tab: "overview" },
+    idempotencyKey: "req_output_1",
+  });
+
+  const sealed = lighttask.advanceOutput(output.id, {
+    expectedRevision: stillOpen.revision,
+    payload: {
+      step: 2,
     },
   });
 
-  output.kind = "外部篡改";
-  assert.ok(output.runtimeRef);
-  output.runtimeRef.id = "runtime_mutated";
-  assert.ok(output.ownerRef);
-  output.ownerRef.kind = "changed";
-  assert.ok(output.payload);
-  output.payload.content = { text: "mutated" };
-  assert.ok(output.items);
-  output.items[0].status = "mutated";
-  assert.ok(output.items[0].metadata);
-  output.items[0].metadata.owner = { name: "mutated" };
-  assert.ok(output.items[0].extensions);
-  output.items[0].extensions.namespaces = { outputItem: { lane: "mutated" } };
-
-  const listed = lighttask.listOutputs();
-  listed[0].kind = "列表篡改";
-  assert.ok(listed[0].metadata);
-  listed[0].metadata.owner = { name: "mutated" };
-  assert.ok(listed[0].items);
-  listed[0].items[0].label = "列表篡改";
-
-  const stored = lighttask.getOutput("output_snapshot");
-  assert.ok(stored);
-  assert.equal(stored.kind, "report");
-  assert.deepEqual(stored.runtimeRef, {
-    id: "runtime_1",
-  });
-  assert.deepEqual(stored.ownerRef, {
-    kind: "plan",
-    id: "plan_snapshot",
-  });
-  assert.deepEqual(stored.payload, {
-    content: { text: "draft" },
-  });
-  assert.deepEqual(stored.items, [
-    {
-      id: "artifact_snapshot",
-      kind: "text",
-      status: "declared",
-      metadata: {
-        owner: { name: "tester" },
-      },
-      extensions: {
-        namespaces: { outputItem: { lane: "snapshot" } },
-      },
-    },
-  ]);
-  assert.deepEqual(stored.metadata, {
-    owner: { name: "tester" },
-  });
-});
-
-test("LightTask Output API expectedRevision 不匹配时返回 REVISION_CONFLICT", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-  lighttask.createOutput({
-    id: "output_revision_conflict",
-    kind: "summary",
-  });
-
-  assert.throws(
-    () =>
-      lighttask.advanceOutput("output_revision_conflict", {
-        expectedRevision: 2,
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "REVISION_CONFLICT");
-      assert.equal(error.coreError.message, "expectedRevision 与当前 revision 不一致");
-      assert.equal(error.details?.currentRevision, 1);
-      assert.equal(error.details?.expectedRevision, 2);
-      return true;
-    },
-  );
-});
-
-test("LightTask Output API 创建时会校验 runtimeRef.id 与 ownerRef", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-
-  assert.throws(
-    () =>
-      lighttask.createOutput({
-        id: "output_invalid_runtime_ref",
-        kind: "summary",
-        runtimeRef: {
-          id: "   ",
-        },
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "输出 runtimeRef.id 不能为空");
-      return true;
-    },
-  );
-
-  assert.throws(
-    () =>
-      lighttask.createOutput({
-        id: "output_invalid_owner_kind",
-        kind: "summary",
-        ownerRef: {
-          kind: "   ",
-          id: "task_1",
-        },
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "输出 ownerRef.kind 不能为空");
-      return true;
-    },
-  );
-});
-
-test("LightTask Output API 会校验并规范化 items", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-
-  assert.throws(
-    () =>
-      lighttask.createOutput({
-        id: "output_invalid_item_id",
-        kind: "summary",
-        items: [
-          {
-            id: "   ",
-            kind: "text",
-          },
-        ],
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "输出 item.id 不能为空");
-      return true;
-    },
-  );
-
-  assert.throws(
-    () =>
-      lighttask.createOutput({
-        id: "output_invalid_item_kind",
-        kind: "summary",
-        items: [
-          {
-            id: "artifact_1",
-            kind: "   ",
-          },
-        ],
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "输出 item.kind 不能为空");
-      return true;
-    },
-  );
-
-  assert.throws(
-    () =>
-      lighttask.createOutput({
-        id: "output_duplicate_item_id",
-        kind: "summary",
-        items: [
-          {
-            id: "artifact_1",
-            kind: "text",
-          },
-          {
-            id: " artifact_1 ",
-            kind: "json",
-          },
-        ],
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "输出 items 中存在重复 id");
-      return true;
-    },
-  );
-});
-
-test("LightTask Output API 终态默认推进会返回 STATE_CONFLICT", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-  lighttask.createOutput({
-    id: "output_terminal",
-    kind: "summary",
-  });
-  lighttask.advanceOutput("output_terminal", {
-    expectedRevision: 1,
-  });
-
-  assert.throws(
-    () =>
-      lighttask.advanceOutput("output_terminal", {
-        expectedRevision: 2,
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "STATE_CONFLICT");
-      assert.equal(error.coreError.message, "当前输出没有可推进动作");
-      assert.equal(error.details?.outputId, "output_terminal");
-      assert.equal(error.details?.currentStatus, "sealed");
-      return true;
-    },
-  );
-});
-
-test("LightTask Output API 缺失 expectedRevision 或推进无变化时会抛校验错误", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-  lighttask.createOutput({
-    id: "output_missing_revision",
-    kind: "summary",
-  });
-
-  assert.throws(
-    () => lighttask.advanceOutput("output_missing_revision", {} as never),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "expectedRevision 为必填字段");
-      assert.equal(error.details?.outputId, "output_missing_revision");
-      return true;
-    },
-  );
-
-  assert.throws(
-    () =>
-      lighttask.advanceOutput("output_missing_revision", {
-        expectedRevision: 1,
-        status: "open",
-      }),
-    (error) => {
-      assert.ok(error instanceof LightTaskError);
-      assert.equal(error.code, "VALIDATION_ERROR");
-      assert.equal(error.coreError.message, "推进输出至少需要提供 payload、items 或 status 变更");
-      assert.equal(error.details?.outputId, "output_missing_revision");
-      return true;
-    },
-  );
-});
-
-test("LightTask Output API advanceOutput 对 items 使用整字段替换与清空语义", () => {
-  const lighttask = createLightTask(createTestLightTaskOptions());
-  lighttask.createOutput({
-    id: "output_items_replace",
-    kind: "summary",
-    items: [
-      {
-        id: "artifact_a",
-        kind: "text",
-      },
-      {
-        id: "artifact_b",
-        kind: "json",
-      },
-    ],
-  });
-
-  const replaced = lighttask.advanceOutput("output_items_replace", {
-    expectedRevision: 1,
-    status: "open",
-    items: [
-      {
-        id: " artifact_c ",
-        kind: " markdown ",
-        label: " 已替换 ",
-      },
-    ],
-  });
-  assert.equal(replaced.revision, 2);
-  assert.deepEqual(replaced.items, [
-    {
-      id: "artifact_c",
-      kind: "markdown",
-      status: "declared",
-      label: "已替换",
-    },
-  ]);
-
-  const cleared = lighttask.advanceOutput("output_items_replace", {
-    expectedRevision: 2,
-    status: "open",
-    items: null,
-  });
-  assert.equal(cleared.revision, 3);
-  assert.equal(cleared.items, undefined);
-
-  const sealed = lighttask.advanceOutput("output_items_replace", {
-    expectedRevision: 3,
-  });
   assert.equal(sealed.status, "sealed");
-  assert.equal(sealed.items, undefined);
+  assert.equal(sealed.idempotencyKey, undefined);
 });
 
-test("LightTask Output API 按路径校验 output 依赖", () => {
-  assertInvalidDependencyCases([
-    {
-      name: "outputRepository.create",
-      options: {
-        outputRepository: {},
-      },
-      invoke(lighttask) {
-        lighttask.createOutput({
-          id: "output_invalid_dep_create",
-          kind: "summary",
-        });
-      },
+test("Output API：非法 status 会直接报校验错误", () => {
+  const { lighttask } = createTestLightTask();
+  const output = lighttask.createOutput({
+    id: "output_invalid_status",
+    kind: "artifact",
+  });
+
+  assert.throws(
+    () =>
+      lighttask.advanceOutput(output.id, {
+        expectedRevision: output.revision,
+        status: "closed" as never,
+      }),
+    (error) => {
+      assert.ok(error instanceof LightTaskError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      return true;
     },
-    {
-      name: "outputRepository.get",
-      options: {
-        outputRepository: {},
-      },
-      invoke(lighttask) {
-        lighttask.getOutput("output_invalid_dep_get");
-      },
-    },
-    {
-      name: "outputRepository.list",
-      options: {
-        outputRepository: {},
-      },
-      invoke(lighttask) {
-        lighttask.listOutputs();
-      },
-    },
-    {
-      name: "outputRepository.saveIfRevisionMatches",
-      options: {
-        outputRepository: {
-          get(outputId: string): LightTaskOutput | undefined {
-            return {
-              id: outputId,
-              kind: "summary",
-              status: "open",
-              revision: 1,
-              createdAt: "2026-04-14T00:00:00.000Z",
-              updatedAt: "2026-04-14T00:00:00.000Z",
-            };
-          },
-        },
-      },
-      invoke(lighttask) {
-        lighttask.advanceOutput("output_invalid_dep_save", {
-          expectedRevision: 1,
-        });
-      },
-    },
-  ]);
+  );
 });

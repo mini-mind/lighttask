@@ -1,17 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { createCoreError } from "../data-structures";
-import type { DomainEvent } from "../data-structures";
 import type {
-  GraphSnapshot,
+  DomainEvent,
   OutputRecord,
-  PlanSessionRecord,
+  PlanRecord,
   RuntimeRecord,
   StructuredEntityExtensions,
-  TaskDesignStatus,
-  TaskLifecycleStatus,
+  TaskStage,
+  TaskStatus,
+  TaskStepStatus,
 } from "../data-structures";
 import type { ConsistencyPort } from "./port-consistency";
-import type { GraphRepository, GraphSnapshotScope } from "./port-graph-repo";
 import type { NotifyPort } from "./port-notify";
 import type { OutputRepository } from "./port-output-repo";
 import type { PlanRepository } from "./port-plan-repo";
@@ -24,37 +23,29 @@ type KeyedRevisionRecord = {
   revision: number;
 };
 
-type RevisionRecord = {
-  revision: number;
-};
-
-export type InMemoryTaskStage = "investigate" | "design" | "implement" | "verify" | "converge";
-
-export type InMemoryTaskStepStatus = "todo" | "doing" | "done";
-
 export type InMemoryTaskStepRecord = {
   id: string;
   title: string;
-  stage: InMemoryTaskStage;
-  status: InMemoryTaskStepStatus;
+  stage: TaskStage;
+  status: TaskStepStatus;
 };
 
 export type InMemoryTaskRecord = KeyedRevisionRecord & {
+  planId: string;
   title: string;
   summary?: string;
-  planId?: string;
-  designStatus?: TaskDesignStatus;
-  executionStatus: TaskLifecycleStatus;
+  status: TaskStatus;
+  dependsOnTaskIds: string[];
   createdAt: string;
-  updatedAt?: string;
+  updatedAt: string;
   idempotencyKey?: string;
   steps: InMemoryTaskStepRecord[];
   metadata?: Record<string, unknown>;
   extensions?: StructuredEntityExtensions;
+  lastCreateFingerprint?: string;
+  lastUpdateFingerprint?: string;
   lastAdvanceFingerprint?: string;
 };
-
-const DEFAULT_GRAPH_SCOPE: GraphSnapshotScope = "draft";
 
 function cloneSnapshot<TRecord>(record: TRecord): TRecord {
   return structuredClone(record);
@@ -102,9 +93,7 @@ function createInMemoryKeyedRepository<TRecord extends KeyedRevisionRecord>(conf
     },
     create(record: TRecord) {
       const snapshot = cloneSnapshot(record);
-      const existed = records.some((item) => item.id === snapshot.id);
-
-      if (existed) {
+      if (records.some((item) => item.id === snapshot.id)) {
         return {
           ok: false as const,
           error: createDuplicateIdError(config.entityName, config.entityIdLabel, snapshot.id),
@@ -120,14 +109,12 @@ function createInMemoryKeyedRepository<TRecord extends KeyedRevisionRecord>(conf
     saveIfRevisionMatches(record: TRecord, expectedRevision: number) {
       const snapshot = cloneSnapshot(record);
       const index = records.findIndex((item) => item.id === snapshot.id);
-
       if (index === -1) {
         return {
           ok: false as const,
           error: createMissingError(config.entityName, config.entityIdLabel, snapshot.id),
         };
       }
-
       if (records[index].revision !== expectedRevision) {
         return {
           ok: false as const,
@@ -145,6 +132,33 @@ function createInMemoryKeyedRepository<TRecord extends KeyedRevisionRecord>(conf
       return {
         ok: true as const,
         record: cloneSnapshot(snapshot),
+      };
+    },
+    deleteIfRevisionMatches(recordId: string, expectedRevision: number) {
+      const index = records.findIndex((item) => item.id === recordId);
+      if (index === -1) {
+        return {
+          ok: false as const,
+          error: createMissingError(config.entityName, config.entityIdLabel, recordId),
+        };
+      }
+      if (records[index].revision !== expectedRevision) {
+        return {
+          ok: false as const,
+          error: createRevisionConflictError(
+            config.entityName,
+            config.entityIdLabel,
+            recordId,
+            expectedRevision,
+            records[index].revision,
+          ),
+        };
+      }
+
+      const [deleted] = records.splice(index, 1);
+      return {
+        ok: true as const,
+        record: cloneSnapshot(deleted),
       };
     },
   };
@@ -170,7 +184,6 @@ export function createInMemoryTaskRepository<
       if (!created.ok) {
         return created;
       }
-
       return {
         ok: true as const,
         task: created.record,
@@ -181,10 +194,19 @@ export function createInMemoryTaskRepository<
       if (!saved.ok) {
         return saved;
       }
-
       return {
         ok: true as const,
         task: saved.record,
+      };
+    },
+    deleteIfRevisionMatches(taskId, expectedRevision) {
+      const deleted = repository.deleteIfRevisionMatches(taskId, expectedRevision);
+      if (!deleted.ok) {
+        return deleted;
+      }
+      return {
+        ok: true as const,
+        task: deleted.record,
       };
     },
   };
@@ -210,7 +232,6 @@ export function createInMemoryPlanRepository<
       if (!created.ok) {
         return created;
       }
-
       return {
         ok: true as const,
         plan: created.record,
@@ -221,7 +242,6 @@ export function createInMemoryPlanRepository<
       if (!saved.ok) {
         return saved;
       }
-
       return {
         ok: true as const,
         plan: saved.record,
@@ -250,7 +270,6 @@ export function createInMemoryRuntimeRepository<
       if (!created.ok) {
         return created;
       }
-
       return {
         ok: true as const,
         runtime: created.record,
@@ -261,7 +280,6 @@ export function createInMemoryRuntimeRepository<
       if (!saved.ok) {
         return saved;
       }
-
       return {
         ok: true as const,
         runtime: saved.record,
@@ -290,7 +308,6 @@ export function createInMemoryOutputRepository<
       if (!created.ok) {
         return created;
       }
-
       return {
         ok: true as const,
         output: created.record,
@@ -301,89 +318,9 @@ export function createInMemoryOutputRepository<
       if (!saved.ok) {
         return saved;
       }
-
       return {
         ok: true as const,
         output: saved.record,
-      };
-    },
-  };
-}
-
-export function createInMemoryGraphRepository<
-  TGraph extends RevisionRecord,
->(): GraphRepository<TGraph> {
-  const graphsByScope = new Map<GraphSnapshotScope, Map<string, TGraph>>();
-
-  function resolveGraphScope(scope: GraphSnapshotScope | undefined): GraphSnapshotScope {
-    return scope ?? DEFAULT_GRAPH_SCOPE;
-  }
-
-  function getGraphs(scope: GraphSnapshotScope | undefined): Map<string, TGraph> {
-    const normalizedScope = resolveGraphScope(scope);
-    const existed = graphsByScope.get(normalizedScope);
-
-    if (existed) {
-      return existed;
-    }
-
-    // 草稿与已发布图必须逻辑隔离，避免发布边界退化成对同一记录的覆写。
-    const created = new Map<string, TGraph>();
-    graphsByScope.set(normalizedScope, created);
-    return created;
-  }
-
-  return {
-    get(planId, scope) {
-      const graph = getGraphs(scope).get(planId);
-      return graph ? cloneSnapshot(graph) : undefined;
-    },
-    create(planId, graph, scope) {
-      const snapshot = cloneSnapshot(graph);
-      const graphs = getGraphs(scope);
-
-      if (graphs.has(planId)) {
-        return {
-          ok: false as const,
-          error: createDuplicateIdError("计划图", "planId", planId),
-        };
-      }
-
-      graphs.set(planId, snapshot);
-      return {
-        ok: true as const,
-        graph: cloneSnapshot(snapshot),
-      };
-    },
-    saveIfRevisionMatches(planId, graph, expectedRevision, scope) {
-      const snapshot = cloneSnapshot(graph);
-      const graphs = getGraphs(scope);
-      const current = graphs.get(planId);
-
-      if (!current) {
-        return {
-          ok: false as const,
-          error: createMissingError("计划图", "planId", planId),
-        };
-      }
-
-      if (current.revision !== expectedRevision) {
-        return {
-          ok: false as const,
-          error: createRevisionConflictError(
-            "计划图",
-            "planId",
-            planId,
-            expectedRevision,
-            current.revision,
-          ),
-        };
-      }
-
-      graphs.set(planId, snapshot);
-      return {
-        ok: true as const,
-        graph: cloneSnapshot(snapshot),
       };
     },
   };
@@ -399,7 +336,6 @@ export function createSystemClock(): ClockPort {
 
 export function createTaskIdGenerator(): IdGeneratorPort {
   return {
-    // CLI 与测试只需要稳定可用的本地 ID 生成器，因此实现放在 ports 层供组合侧复用。
     nextTaskId() {
       return `task_${randomUUID()}`;
     },
@@ -440,8 +376,7 @@ export function createInMemoryNotifyCollector<
 
 export interface InMemoryLightTaskPortsOptions {
   taskRepository?: TaskRepository<InMemoryTaskRecord>;
-  planRepository?: PlanRepository<PlanSessionRecord>;
-  graphRepository?: GraphRepository<GraphSnapshot>;
+  planRepository?: PlanRepository<PlanRecord>;
   runtimeRepository?: RuntimeRepository<RuntimeRecord>;
   outputRepository?: OutputRepository<OutputRecord>;
   notify?: NotifyPort<DomainEvent>;
@@ -452,8 +387,7 @@ export interface InMemoryLightTaskPortsOptions {
 
 export interface InMemoryLightTaskPorts {
   taskRepository: TaskRepository<InMemoryTaskRecord>;
-  planRepository: PlanRepository<PlanSessionRecord>;
-  graphRepository: GraphRepository<GraphSnapshot>;
+  planRepository: PlanRepository<PlanRecord>;
   runtimeRepository: RuntimeRepository<RuntimeRecord>;
   outputRepository: OutputRepository<OutputRecord>;
   notify: NotifyPort<DomainEvent>;
@@ -467,8 +401,7 @@ export function createInMemoryLightTaskPorts(
 ): InMemoryLightTaskPorts {
   return {
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<InMemoryTaskRecord>(),
-    planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PlanSessionRecord>(),
-    graphRepository: overrides.graphRepository ?? createInMemoryGraphRepository<GraphSnapshot>(),
+    planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PlanRecord>(),
     runtimeRepository:
       overrides.runtimeRepository ?? createInMemoryRuntimeRepository<RuntimeRecord>(),
     outputRepository: overrides.outputRepository ?? createInMemoryOutputRepository<OutputRecord>(),

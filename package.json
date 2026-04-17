@@ -2,10 +2,18 @@
   "name": "lighttask",
   "version": "0.1.0",
   "description": "LightTask 通用人机协作编排内核",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mini-mind/lighttask.git"
+  },
+  "homepage": "https://github.com/mini-mind/lighttask",
+  "bugs": {
+    "url": "https://github.com/mini-mind/lighttask/issues"
+  },
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "!dist/tests/**", "CHANGELOG.md"],
+  "files": ["dist", "!dist/tests/**", "!dist/cli/**", "CHANGELOG.md"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -31,7 +39,7 @@
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "test": "npm run build && node --test ./dist/tests",
-    "test:api": "npm run build && node --test ./dist/tests/lighttask.task.flow.api.test.js ./dist/tests/lighttask.task.idempotency.api.test.js ./dist/tests/lighttask.task.error-boundary.api.test.js ./dist/tests/lighttask.output.api.test.js ./dist/tests/data-structures.test.js",
+    "test:api": "npm run build && node --test ./dist/tests/lighttask.plan.api.test.js ./dist/tests/lighttask.query.api.test.js ./dist/tests/lighttask.scheduling.api.test.js ./dist/tests/lighttask.notify.api.test.js ./dist/tests/lighttask.task.flow.api.test.js ./dist/tests/lighttask.task.idempotency.api.test.js ./dist/tests/lighttask.task.error-boundary.api.test.js ./dist/tests/lighttask.runtime.api.test.js ./dist/tests/lighttask.output.api.test.js ./dist/tests/public-export-contract.test.js ./dist/tests/rules.fsm.test.js ./dist/tests/data-structures.test.js ./dist/tests/ports.in-memory.test.js",
     "test:cli": "npm run build && node --test ./dist/tests/cli.test.js",
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "arch:check": "node scripts/arch-check.mjs",
@@ -40,8 +48,7 @@
     "format:check": "biome check --formatter-enabled=true --linter-enabled=false src scripts",
     "quality": "npm run typecheck && npm run lint && npm run format:check && npm run arch:check",
     "check": "npm run quality && npm run test",
-    "dev:cli": "node ./node_modules/tsx/dist/cli.cjs src/cli/smoke.ts",
-    "cli": "node dist/cli/smoke.js"
+    "dev:cli": "node ./node_modules/tsx/dist/cli.cjs src/cli/smoke.ts"
   },
   "engines": {
     "node": ">=20"

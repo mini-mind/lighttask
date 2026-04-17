@@ -21,4 +21,11 @@ export interface TaskRepository<TTask extends { id: string; revision: number }> 
    * 常规失败应通过 ok:false 返回结构化错误；成功返回的任务也必须与存储态隔离。
    */
   saveIfRevisionMatches(task: TTask, expectedRevision: number): TaskRepositoryWriteResult<TTask>;
+  /**
+   * 删除必须服从 revision 保护，避免把并发更新静默吃掉。
+   */
+  deleteIfRevisionMatches(
+    taskId: string,
+    expectedRevision: number,
+  ): TaskRepositoryWriteResult<TTask>;
 }

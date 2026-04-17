@@ -1,5 +1,4 @@
-import { createPlanSessionRecord } from "../data-structures";
-import { resolvePlanLifecyclePolicy } from "./lifecycle-policy";
+import { createPlanRecord } from "../data-structures";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -14,13 +13,22 @@ import type {
   PersistedLightPlan,
 } from "./types";
 
+function buildCreatePlanFingerprint(input: {
+  id: string;
+  title: string;
+  metadata?: Record<string, unknown>;
+  extensions?: unknown;
+}): string {
+  return JSON.stringify(input);
+}
+
 export function createPlanUseCase(
   options: CreateLightTaskOptions,
   input: CreatePlanInput,
 ): LightTaskPlan {
   const publishEvent = resolveNotifyPublisher(options);
-  const planLifecycle = resolvePlanLifecyclePolicy(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
+  const getPlan = requireLightTaskFunction(options.planRepository?.get, "planRepository.get");
   const createPlan = requireLightTaskFunction(
     options.planRepository?.create,
     "planRepository.create",
@@ -30,30 +38,54 @@ export function createPlanUseCase(
 
   if (!planId) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "计划 ID 不能为空", {
-        planId: input.id,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "计划 ID 不能为空", { planId: input.id }),
     );
   }
-
   if (!title) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "计划标题不能为空", {
-        title: input.title,
-      }),
+      createLightTaskError("VALIDATION_ERROR", "计划标题不能为空", { title: input.title }),
     );
   }
 
-  const plan: PersistedLightPlan = createPlanSessionRecord({
+  const fingerprint = buildCreatePlanFingerprint({
     id: planId,
     title,
-    createdAt: clockNow(),
-    status: planLifecycle.initialStatus,
     metadata: input.metadata,
     extensions: input.extensions,
   });
-  const created = createPlan(plan);
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const existed = getPlan(planId);
+  if (existed) {
+    if (normalizedIdempotencyKey && existed.idempotencyKey === normalizedIdempotencyKey) {
+      if (existed.lastCreateFingerprint === fingerprint) {
+        return toPublicPlan(existed);
+      }
+      throwLightTaskError(
+        createLightTaskError(
+          "STATE_CONFLICT",
+          "相同 idempotencyKey 对应的请求内容不一致，拒绝处理。",
+          {
+            idempotencyKey: normalizedIdempotencyKey,
+            incomingFingerprint: fingerprint,
+            storedFingerprint: existed.lastCreateFingerprint,
+          },
+        ),
+      );
+    }
+  }
 
+  const plan: PersistedLightPlan = {
+    ...createPlanRecord({
+      id: planId,
+      title,
+      createdAt: clockNow(),
+      metadata: input.metadata,
+      extensions: input.extensions,
+      idempotencyKey: normalizedIdempotencyKey,
+    }),
+    lastCreateFingerprint: fingerprint,
+  };
+  const created = createPlan(plan);
   if (!created.ok) {
     throwLightTaskError(created.error);
   }

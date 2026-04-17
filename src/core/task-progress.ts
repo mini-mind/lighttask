@@ -1,46 +1,19 @@
-import type { TaskAction, TaskLifecyclePolicy } from "../rules";
-import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
-import type { PersistedLightTask } from "./types";
+import type { TaskAction } from "../rules";
+import { advanceTaskStepsOne, completeAllTaskSteps, resetTaskStepsToTodo } from "./task-snapshot";
+import type { LightTaskStep } from "./types";
 
-export function applyTaskStepProgress(
-  task: PersistedLightTask,
-  action: TaskAction,
-  taskLifecycle: TaskLifecyclePolicy,
-): void {
-  const progressPolicy = taskLifecycle.resolveStepProgress(action);
-  if (progressPolicy === "complete_all") {
-    // completed 代表流程闭环，剩余步骤统一收敛为 done，避免状态和步骤语义错位。
-    markAllRemainingStepsDone(task);
-    return;
-  }
-  if (progressPolicy === "advance_one") {
-    advanceOneStep(task);
-  }
-}
-
-function advanceOneStep(task: PersistedLightTask): void {
-  const currentStepIndex = task.steps.findIndex((step) => step.status === "doing");
-  if (currentStepIndex === -1) {
-    throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "任务没有可推进的进行中阶段", {
-        taskId: task.id,
-      }),
-    );
+export function applyTaskStepProgress(steps: LightTaskStep[], action: TaskAction): LightTaskStep[] {
+  if (action === "complete") {
+    return completeAllTaskSteps(steps);
   }
 
-  task.steps[currentStepIndex].status = "done";
-  const nextStep = task.steps[currentStepIndex + 1];
-  if (nextStep) {
-    nextStep.status = "doing";
+  if (action === "dispatch" || action === "start") {
+    return advanceTaskStepsOne(steps);
   }
-}
 
-function markAllRemainingStepsDone(task: PersistedLightTask): void {
-  const currentStepIndex = task.steps.findIndex((step) => step.status === "doing");
-  if (currentStepIndex === -1) {
-    return;
+  if (action === "return_to_draft" || action === "finalize") {
+    return resetTaskStepsToTodo(steps);
   }
-  for (let i = currentStepIndex; i < task.steps.length; i += 1) {
-    task.steps[i].status = "done";
-  }
+
+  return steps.map((step) => ({ ...step }));
 }

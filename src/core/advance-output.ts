@@ -1,5 +1,5 @@
 import { bumpRevision } from "../data-structures";
-import { assertExpectedRevision, assertNextRevision } from "../rules";
+import { assertExpectedRevision, decideIdempotency } from "../rules";
 import { cloneOptional } from "./clone";
 import {
   createLightTaskError,
@@ -16,22 +16,18 @@ import type {
   PersistedLightOutput,
 } from "./types";
 
-function assertOutputId(outputId: string): string {
-  const normalizedOutputId = outputId.trim();
-
-  if (!normalizedOutputId) {
-    throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "输出 ID 不能为空", {
-        outputId,
-      }),
-    );
-  }
-
-  return normalizedOutputId;
-}
-
 function hasOwnField(input: AdvanceOutputInput, fieldName: keyof AdvanceOutputInput): boolean {
   return Object.prototype.hasOwnProperty.call(input, fieldName);
+}
+
+function buildAdvanceOutputFingerprint(outputId: string, input: AdvanceOutputInput): string {
+  return JSON.stringify({
+    outputId,
+    expectedRevision: input.expectedRevision,
+    status: hasOwnField(input, "status") ? (input.status ?? null) : undefined,
+    payload: hasOwnField(input, "payload") ? (input.payload ?? null) : undefined,
+    items: hasOwnField(input, "items") ? (input.items ?? null) : undefined,
+  });
 }
 
 export function advanceOutputUseCase(
@@ -46,44 +42,60 @@ export function advanceOutputUseCase(
     "outputRepository.saveIfRevisionMatches",
   );
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
-  const normalizedOutputId = assertOutputId(outputId);
-  const storedOutput = getOutput(normalizedOutputId);
+  const normalizedOutputId = outputId.trim();
+  if (!normalizedOutputId) {
+    throwLightTaskError(createLightTaskError("VALIDATION_ERROR", "输出 ID 不能为空", { outputId }));
+  }
 
+  const storedOutput = getOutput(normalizedOutputId);
   if (!storedOutput) {
     throwLightTaskError(
-      createLightTaskError("NOT_FOUND", "未找到输出", {
-        outputId: normalizedOutputId,
-      }),
+      createLightTaskError("NOT_FOUND", "未找到输出", { outputId: normalizedOutputId }),
     );
   }
 
-  if (input.expectedRevision === undefined) {
+  const normalizedIdempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const fingerprint = buildAdvanceOutputFingerprint(normalizedOutputId, input);
+  const idempotencyDecision = decideIdempotency({
+    incomingIdempotencyKey: normalizedIdempotencyKey,
+    storedIdempotencyKey: storedOutput.idempotencyKey,
+    incomingFingerprint: fingerprint,
+    storedFingerprint: storedOutput.lastAdvanceFingerprint,
+  });
+  if (idempotencyDecision.decision === "replay") {
+    return toPublicOutput(storedOutput);
+  }
+  if (idempotencyDecision.decision === "conflict" && idempotencyDecision.error) {
+    throwLightTaskError(idempotencyDecision.error);
+  }
+
+  assertExpectedRevision(storedOutput.revision, input.expectedRevision);
+  if (
+    hasOwnField(input, "status") &&
+    input.status !== undefined &&
+    input.status !== "open" &&
+    input.status !== "sealed"
+  ) {
     throwLightTaskError(
-      createLightTaskError("VALIDATION_ERROR", "expectedRevision 为必填字段", {
+      createLightTaskError("VALIDATION_ERROR", "输出状态只能是 open 或 sealed", {
         outputId: normalizedOutputId,
+        status: input.status,
       }),
     );
   }
-
-  const output = clonePersistedOutput(storedOutput);
-  if (output.status === "sealed") {
+  if (storedOutput.status === "sealed") {
     throwLightTaskError(
       createLightTaskError("STATE_CONFLICT", "当前输出没有可推进动作", {
         outputId: normalizedOutputId,
-        currentStatus: output.status,
+        currentStatus: storedOutput.status,
       }),
     );
   }
-
-  assertExpectedRevision(output.revision, input.expectedRevision);
-  assertNextRevision(output.revision, output.revision + 1);
 
   const nextStatus = input.status ?? "sealed";
   const payloadProvided = hasOwnField(input, "payload");
   const itemsProvided = hasOwnField(input, "items");
-
-  // 显式阻止无变化推进，避免 output revision 被当作无意义心跳滥用。
-  if (!payloadProvided && !itemsProvided && nextStatus === output.status) {
+  if (!payloadProvided && !itemsProvided && nextStatus === storedOutput.status) {
     throwLightTaskError(
       createLightTaskError(
         "VALIDATION_ERROR",
@@ -95,19 +107,18 @@ export function advanceOutputUseCase(
     );
   }
 
-  const nextRevision = bumpRevision(output, clockNow(), input.idempotencyKey);
+  const nextRevision = bumpRevision(storedOutput, clockNow(), normalizedIdempotencyKey);
   const nextOutput: PersistedLightOutput = {
-    ...output,
+    ...clonePersistedOutput(storedOutput),
     status: nextStatus,
-    payload: payloadProvided ? cloneOptional(input.payload ?? undefined) : output.payload,
-    // items 首切片只支持整字段替换，避免在聚合层引入局部 patch 协议。
-    items: itemsProvided ? normalizeOutputItems(input.items) : output.items,
+    payload: payloadProvided ? cloneOptional(input.payload ?? undefined) : storedOutput.payload,
+    items: itemsProvided ? normalizeOutputItems(input.items) : storedOutput.items,
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,
+    lastAdvanceFingerprint: fingerprint,
   };
   const saved = saveIfRevisionMatches(nextOutput, storedOutput.revision);
-
   if (!saved.ok) {
     throwLightTaskError(saved.error);
   }

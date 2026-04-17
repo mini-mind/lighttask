@@ -4,19 +4,15 @@ export type DomainEventType =
   | "task.created"
   | "task.updated"
   | "task.advanced"
+  | "task.deleted"
   | "plan.created"
   | "plan.updated"
-  | "plan.advanced"
-  | "plan.task_provenance_synced"
-  | "plan.launched"
-  | "graph.saved"
-  | "graph.published"
   | "runtime.created"
   | "runtime.advanced"
   | "output.created"
   | "output.advanced";
 
-export type DomainEventAggregate = "task" | "plan" | "graph" | "runtime" | "output";
+export type DomainEventAggregate = "task" | "plan" | "runtime" | "output";
 
 export interface DomainEvent<
   TType extends DomainEventType = DomainEventType,
@@ -51,7 +47,6 @@ export function createDomainEvent<
   TType extends DomainEventType = DomainEventType,
   TPayload = Record<string, unknown>,
 >(input: CreateDomainEventInput<TType, TPayload>): DomainEvent<TType, TPayload> {
-  // 显式 version 字段用于后续协议演进。
   return {
     id: input.id,
     type: input.type,

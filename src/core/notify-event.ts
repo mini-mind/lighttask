@@ -1,58 +1,51 @@
 import { createDomainEvent } from "../data-structures";
-import type { NotifyPort } from "../ports";
 import { requireLightTaskFunction } from "./lighttask-error";
 import type {
   CreateLightTaskOptions,
-  GraphPublishedEvent,
-  GraphSavedEvent,
+  DeleteTaskResult,
   LightTaskDomainEvent,
-  LightTaskGraph,
   LightTaskOutput,
   LightTaskPlan,
   LightTaskRuntime,
   LightTaskTask,
   OutputAdvancedEvent,
   OutputCreatedEvent,
-  PlanAdvancedEvent,
   PlanCreatedEvent,
-  PlanLaunchedEvent,
-  PlanTaskProvenanceSyncedEvent,
   PlanUpdatedEvent,
   RuntimeAdvancedEvent,
   RuntimeCreatedEvent,
   TaskAdvancedEvent,
   TaskCreatedEvent,
+  TaskDeletedEvent,
   TaskUpdatedEvent,
 } from "./types";
 
-type EventPublisher = NotifyPort<LightTaskDomainEvent>["publish"];
+type PublishEvent = (event: LightTaskDomainEvent) => void;
 
-const NOOP_EVENT_PUBLISHER: EventPublisher = () => {};
-
-function createEventId(type: LightTaskDomainEvent["type"], aggregateId: string, revision: number) {
-  return `${type}:${aggregateId}:r${revision}`;
+function createEventId(type: string, aggregateId: string, revision: number): string {
+  return `event:${type}:${aggregateId}:${revision}`;
 }
 
-function createTaskEvent<
-  TType extends TaskCreatedEvent["type"] | TaskUpdatedEvent["type"] | TaskAdvancedEvent["type"],
->(type: TType, task: LightTaskTask): Extract<LightTaskDomainEvent, { type: TType }> {
+function createTaskEvent<TType extends "task.created" | "task.updated" | "task.advanced">(
+  type: TType,
+  task: LightTaskTask,
+): Extract<TaskCreatedEvent | TaskUpdatedEvent | TaskAdvancedEvent, { type: TType }> {
   return createDomainEvent({
     id: createEventId(type, task.id, task.revision),
     type,
     aggregate: "task",
     aggregateId: task.id,
-    occurredAt: task.updatedAt ?? task.createdAt,
+    occurredAt: task.updatedAt,
     revision: task.revision,
     idempotencyKey: task.idempotencyKey,
-    payload: {
-      task,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+    payload: { task },
+  }) as Extract<TaskCreatedEvent | TaskUpdatedEvent | TaskAdvancedEvent, { type: TType }>;
 }
 
-function createPlanEvent<
-  TType extends PlanCreatedEvent["type"] | PlanUpdatedEvent["type"] | PlanAdvancedEvent["type"],
->(type: TType, plan: LightTaskPlan): Extract<LightTaskDomainEvent, { type: TType }> {
+function createPlanEvent<TType extends "plan.created" | "plan.updated">(
+  type: TType,
+  plan: LightTaskPlan,
+): Extract<PlanCreatedEvent | PlanUpdatedEvent, { type: TType }> {
   return createDomainEvent({
     id: createEventId(type, plan.id, plan.revision),
     type,
@@ -61,65 +54,14 @@ function createPlanEvent<
     occurredAt: plan.updatedAt,
     revision: plan.revision,
     idempotencyKey: plan.idempotencyKey,
-    payload: {
-      plan,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+    payload: { plan },
+  }) as Extract<PlanCreatedEvent | PlanUpdatedEvent, { type: TType }>;
 }
 
-function createPlanOrchestrationEvent<
-  TType extends PlanTaskProvenanceSyncedEvent["type"] | PlanLaunchedEvent["type"],
->(
+function createRuntimeEvent<TType extends "runtime.created" | "runtime.advanced">(
   type: TType,
-  input: {
-    plan: LightTaskPlan;
-    publishedGraph: LightTaskGraph;
-    tasks: LightTaskTask[];
-    revision: number;
-    occurredAt: string;
-    idempotencyKey?: string;
-  },
-): Extract<LightTaskDomainEvent, { type: TType }> {
-  return createDomainEvent({
-    id: createEventId(type, input.plan.id, input.revision),
-    type,
-    aggregate: "plan",
-    aggregateId: input.plan.id,
-    occurredAt: input.occurredAt,
-    revision: input.revision,
-    idempotencyKey: input.idempotencyKey,
-    payload: {
-      plan: input.plan,
-      publishedGraph: input.publishedGraph,
-      tasks: input.tasks,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
-}
-
-function createGraphEvent<TType extends GraphSavedEvent["type"] | GraphPublishedEvent["type"]>(
-  type: TType,
-  planId: string,
-  graph: LightTaskGraph,
-  scope: Extract<LightTaskDomainEvent, { type: TType }>["payload"]["scope"],
-): Extract<LightTaskDomainEvent, { type: TType }> {
-  return createDomainEvent({
-    id: createEventId(type, planId, graph.revision),
-    type,
-    aggregate: "graph",
-    aggregateId: planId,
-    occurredAt: graph.updatedAt,
-    revision: graph.revision,
-    idempotencyKey: graph.idempotencyKey,
-    payload: {
-      scope,
-      graph,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
-}
-
-function createRuntimeEvent<
-  TType extends RuntimeCreatedEvent["type"] | RuntimeAdvancedEvent["type"],
->(type: TType, runtime: LightTaskRuntime): Extract<LightTaskDomainEvent, { type: TType }> {
+  runtime: LightTaskRuntime,
+): Extract<RuntimeCreatedEvent | RuntimeAdvancedEvent, { type: TType }> {
   return createDomainEvent({
     id: createEventId(type, runtime.id, runtime.revision),
     type,
@@ -128,16 +70,14 @@ function createRuntimeEvent<
     occurredAt: runtime.updatedAt,
     revision: runtime.revision,
     idempotencyKey: runtime.idempotencyKey,
-    payload: {
-      runtime,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+    payload: { runtime },
+  }) as Extract<RuntimeCreatedEvent | RuntimeAdvancedEvent, { type: TType }>;
 }
 
-function createOutputEvent<TType extends OutputCreatedEvent["type"] | OutputAdvancedEvent["type"]>(
+function createOutputEvent<TType extends "output.created" | "output.advanced">(
   type: TType,
   output: LightTaskOutput,
-): Extract<LightTaskDomainEvent, { type: TType }> {
+): Extract<OutputCreatedEvent | OutputAdvancedEvent, { type: TType }> {
   return createDomainEvent({
     id: createEventId(type, output.id, output.revision),
     type,
@@ -146,164 +86,118 @@ function createOutputEvent<TType extends OutputCreatedEvent["type"] | OutputAdva
     occurredAt: output.updatedAt,
     revision: output.revision,
     idempotencyKey: output.idempotencyKey,
-    payload: {
-      output,
-    },
-  }) as Extract<LightTaskDomainEvent, { type: TType }>;
+    payload: { output },
+  }) as Extract<OutputCreatedEvent | OutputAdvancedEvent, { type: TType }>;
 }
 
-export function resolveNotifyPublisher(options: CreateLightTaskOptions): EventPublisher {
-  if (!options.notify) {
-    return NOOP_EVENT_PUBLISHER;
+export function resolveNotifyPublisher(options: CreateLightTaskOptions): PublishEvent {
+  const publish = options.notify?.publish;
+  if (!publish) {
+    return () => {};
   }
-
-  return requireLightTaskFunction(options.notify.publish, "notify.publish");
+  return requireLightTaskFunction(publish, "notify.publish");
 }
 
 export function publishTaskCreatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   task: LightTaskTask,
 ): TaskCreatedEvent {
   const event = createTaskEvent("task.created", task);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishTaskUpdatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   task: LightTaskTask,
 ): TaskUpdatedEvent {
   const event = createTaskEvent("task.updated", task);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishTaskAdvancedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   task: LightTaskTask,
 ): TaskAdvancedEvent {
   const event = createTaskEvent("task.advanced", task);
-  publish(event);
+  publishEvent(event);
+  return event;
+}
+
+export function publishTaskDeletedEvent(
+  publishEvent: PublishEvent,
+  input: {
+    result: DeleteTaskResult;
+    occurredAt: string;
+    revision: number;
+    idempotencyKey?: string;
+  },
+): TaskDeletedEvent {
+  const event = createDomainEvent({
+    id: createEventId("task.deleted", input.result.taskId, input.revision),
+    type: "task.deleted",
+    aggregate: "task",
+    aggregateId: input.result.taskId,
+    occurredAt: input.occurredAt,
+    revision: input.revision,
+    idempotencyKey: input.idempotencyKey,
+    payload: { result: input.result },
+  }) as TaskDeletedEvent;
+  publishEvent(event);
   return event;
 }
 
 export function publishPlanCreatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   plan: LightTaskPlan,
 ): PlanCreatedEvent {
   const event = createPlanEvent("plan.created", plan);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishPlanUpdatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   plan: LightTaskPlan,
 ): PlanUpdatedEvent {
   const event = createPlanEvent("plan.updated", plan);
-  publish(event);
-  return event;
-}
-
-export function publishPlanAdvancedEvent(
-  publish: EventPublisher,
-  plan: LightTaskPlan,
-): PlanAdvancedEvent {
-  const event = createPlanEvent("plan.advanced", plan);
-  publish(event);
-  return event;
-}
-
-export function publishPlanTaskProvenanceSyncedEvent(
-  publish: EventPublisher,
-  input: {
-    plan: LightTaskPlan;
-    publishedGraph: LightTaskGraph;
-    tasks: LightTaskTask[];
-  },
-): PlanTaskProvenanceSyncedEvent {
-  const event = createPlanOrchestrationEvent("plan.task_provenance_synced", {
-    ...input,
-    // 事件绑定到已发布图 revision，表示这批任务已完成该版本关系 provenance 同步。
-    revision: input.publishedGraph.revision,
-    occurredAt: input.publishedGraph.updatedAt,
-    idempotencyKey: input.publishedGraph.idempotencyKey,
-  });
-  publish(event);
-  return event;
-}
-
-export function publishPlanLaunchedEvent(
-  publish: EventPublisher,
-  input: {
-    plan: LightTaskPlan;
-    publishedGraph: LightTaskGraph;
-    tasks: LightTaskTask[];
-  },
-): PlanLaunchedEvent {
-  const event = createPlanOrchestrationEvent("plan.launched", {
-    ...input,
-    // launched 绑定确认后的计划 revision，表示 ready -> confirmed 的闭环已完成。
-    revision: input.plan.revision,
-    occurredAt: input.plan.updatedAt,
-    idempotencyKey: input.plan.idempotencyKey,
-  });
-  publish(event);
-  return event;
-}
-
-export function publishGraphSavedEvent(
-  publish: EventPublisher,
-  planId: string,
-  graph: LightTaskGraph,
-): GraphSavedEvent {
-  const event = createGraphEvent("graph.saved", planId, graph, "draft");
-  publish(event);
-  return event;
-}
-
-export function publishGraphPublishedEvent(
-  publish: EventPublisher,
-  planId: string,
-  graph: LightTaskGraph,
-): GraphPublishedEvent {
-  const event = createGraphEvent("graph.published", planId, graph, "published");
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishRuntimeCreatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   runtime: LightTaskRuntime,
 ): RuntimeCreatedEvent {
   const event = createRuntimeEvent("runtime.created", runtime);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishRuntimeAdvancedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   runtime: LightTaskRuntime,
 ): RuntimeAdvancedEvent {
   const event = createRuntimeEvent("runtime.advanced", runtime);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishOutputCreatedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   output: LightTaskOutput,
 ): OutputCreatedEvent {
   const event = createOutputEvent("output.created", output);
-  publish(event);
+  publishEvent(event);
   return event;
 }
 
 export function publishOutputAdvancedEvent(
-  publish: EventPublisher,
+  publishEvent: PublishEvent,
   output: LightTaskOutput,
 ): OutputAdvancedEvent {
   const event = createOutputEvent("output.advanced", output);
-  publish(event);
+  publishEvent(event);
   return event;
 }
