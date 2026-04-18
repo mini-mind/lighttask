@@ -37,7 +37,10 @@ test("公共导出契约：models 只暴露当前领域模型构造能力", () =
 
 test("公共导出契约：policies 只暴露当前策略与运行时规则", () => {
   const exportsMap = requireFromPackage("lighttask/policies") as Record<string, unknown>;
-  assert.equal(typeof exportsMap.createTaskLifecyclePolicy, "function");
+  assert.equal(typeof exportsMap.defineTaskPolicy, "function");
+  assert.equal(typeof exportsMap.defineTaskPolicies, "function");
+  assert.equal("createTaskLifecyclePolicy" in exportsMap, false);
+  assert.equal("createTaskPolicyRegistry" in exportsMap, false);
   assert.equal(typeof exportsMap.transitionRuntimeStatus, "function");
   assert.equal("topologicalSort" in exportsMap, false);
   assert.equal("canPlanTransition" in exportsMap, false);
@@ -45,7 +48,8 @@ test("公共导出契约：policies 只暴露当前策略与运行时规则", ()
 
 test("公共导出契约：adapters/memory 只暴露当前内存适配器", () => {
   const exportsMap = requireFromPackage("lighttask/adapters/memory") as Record<string, unknown>;
-  assert.equal(typeof exportsMap.createInMemoryLightTaskPorts, "function");
+  assert.equal(typeof exportsMap.createMemoryAdapters, "function");
+  assert.equal("createInMemoryLightTaskPorts" in exportsMap, false);
   assert.equal(typeof exportsMap.createInMemoryTaskRepository, "function");
   assert.equal("createInMemoryGraphRepository" in exportsMap, false);
 });

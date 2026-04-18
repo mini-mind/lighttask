@@ -58,7 +58,7 @@ LightTask 是面向上层业务应用的 TypeScript 编排内核。
 ```text
 Plan 1 --- n Task
 Task n --- n Task   (通过 dependsOnTaskIds，且只能同 Plan)
-Task 1 --- n PlanSchedulingTaskFactsView
+Plan 1 --- 1 调度结果（即时读取）
 Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 ```
 
@@ -67,7 +67,7 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 - `Plan` 只负责把一批任务装在一起
 - `Task` 才是真正决定调度结果的卡片
 - 任务之间的依赖直接写在任务自己身上
-- 调度事实只是读取视图，不是新的持久化真源
+- 调度结果只是读取结果，不是新的持久化真源
 - `Runtime` 和 `Output` 只是执行留痕，不反过来决定任务定义和依赖
 
 ## 状态模型
@@ -166,10 +166,10 @@ LightTask 对删除任务采取稳妥兜底：
 
 ```ts
 import { createLightTask } from "lighttask";
-import { createInMemoryLightTaskPorts } from "lighttask/adapters/memory";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "lighttask/policies";
+import { createMemoryAdapters } from "lighttask/adapters/memory";
+import { defineTaskPolicy, defineTaskPolicies } from "lighttask/policies";
 
-const taskPolicy = createTaskLifecyclePolicy({
+const taskPolicy = defineTaskPolicy({
   initialStatus: "draft",
   statusDefinitions: [
     {
@@ -207,8 +207,8 @@ const taskPolicy = createTaskLifecyclePolicy({
 });
 
 const lighttask = createLightTask(
-  createInMemoryLightTaskPorts({
-    taskPolicies: createTaskPolicyRegistry({
+  createMemoryAdapters({
+    taskPolicies: defineTaskPolicies({
       policies: {
         default: taskPolicy,
       },

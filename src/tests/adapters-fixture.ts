@@ -9,13 +9,13 @@ import {
   createTaskIdGenerator,
 } from "../adapters/memory";
 import { createLightTask } from "../index";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "../policies";
+import { defineTaskPolicies, defineTaskPolicy } from "../policies";
 
 type TestLightTaskOptions = Parameters<typeof createLightTask>[0];
 export const DEFAULT_TASK_POLICY_ID = "default";
 
 export function createExampleTaskLifecycle() {
-  return createTaskLifecyclePolicy({
+  return defineTaskPolicy({
     initialStatus: "draft",
     statusDefinitions: [
       {
@@ -111,7 +111,7 @@ export function createExampleTaskLifecycle() {
 }
 
 export function createExampleTaskPolicies() {
-  return createTaskPolicyRegistry({
+  return defineTaskPolicies({
     policies: {
       [DEFAULT_TASK_POLICY_ID]: createExampleTaskLifecycle(),
     },

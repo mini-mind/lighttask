@@ -5,26 +5,25 @@ export type {
 
 export type {
   TaskActionDefinition,
-  CreateTaskLifecyclePolicyInput,
+  DefineTaskPolicyInput,
   TaskAction,
   TaskLifecycleApplyInput,
   TaskLifecycleGuardInput,
   TaskLifecycleHooks,
-  TaskLifecyclePolicy,
+  TaskPolicy,
   TaskLifecycleNotifyInput,
   TaskStepProgressPolicy,
   TaskStatusDefinition,
   TaskStatusTransitionDefinition,
   TaskTransitionResult,
 } from "./rule-task-fsm";
-export { createTaskLifecyclePolicy } from "./rule-task-fsm";
+export { defineTaskPolicy } from "./rule-task-fsm";
 export type {
-  CreateTaskPolicyRegistryInput,
-  TaskPolicy,
-  TaskPolicyRegistry,
-  TaskPolicySummary,
+  DefineTaskPoliciesInput,
+  TaskPolicies,
+  TaskPolicyInfo,
 } from "./rule-task-policy";
-export { createTaskPolicyRegistry } from "./rule-task-policy";
+export { defineTaskPolicies } from "./rule-task-policy";
 
 export type {
   CreateRuntimeLifecyclePolicyInput,

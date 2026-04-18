@@ -25,12 +25,7 @@ import type {
   TaskStatus,
   TaskStepStatus,
 } from "../models";
-import type {
-  RuntimeAction,
-  RuntimeLifecyclePolicy,
-  TaskAction,
-  TaskPolicyRegistry,
-} from "../policies";
+import type { RuntimeAction, RuntimeLifecyclePolicy, TaskAction, TaskPolicies } from "../policies";
 
 export interface LightTaskStep {
   id: string;
@@ -387,7 +382,7 @@ export interface CreateLightTaskOptions {
   consistency?: LazyValidatedPort<ConsistencyPort>;
   clock: LazyValidatedPort<ClockPort>;
   idGenerator: LazyValidatedPort<IdGeneratorPort>;
-  taskPolicies: TaskPolicyRegistry;
+  taskPolicies: TaskPolicies;
   runtimeLifecycle?: RuntimeLifecyclePolicy;
 }
 

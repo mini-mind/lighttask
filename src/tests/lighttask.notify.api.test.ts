@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createInMemoryNotifyCollector } from "../adapters/memory";
 import { createLightTask } from "../index";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "../policies";
+import { defineTaskPolicies, defineTaskPolicy } from "../policies";
 import { DEFAULT_TASK_POLICY_ID, createTestLightTaskOptions } from "./adapters-fixture";
 
 test("Notify API：发布 task created/updated/advanced/deleted 事件", () => {
@@ -134,9 +134,9 @@ test("Notify API：自定义 taskPolicy 会把陌生状态 key 原样带入事�
   const lighttask = createLightTask(
     createTestLightTaskOptions({
       notify,
-      taskPolicies: createTaskPolicyRegistry({
+      taskPolicies: defineTaskPolicies({
         policies: {
-          custom_notify: createTaskLifecyclePolicy({
+          custom_notify: defineTaskPolicy({
             initialStatus: "ready_for_work",
             statusDefinitions: [
               {

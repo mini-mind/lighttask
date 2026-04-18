@@ -79,7 +79,9 @@ lighttask.plans.create({
 例如，应用层可以先注册一套自己的生命周期：
 
 ```ts
-const taskPolicy = createTaskLifecyclePolicy({
+import { defineTaskPolicy } from "lighttask/policies";
+
+const taskPolicy = defineTaskPolicy({
   initialStatus: "draft",
   statusDefinitions: [
     { key: "draft", editable: true, schedulable: false, active: false, terminal: false },
@@ -214,10 +216,10 @@ LightTask 不会负责：
 
 ```ts
 import { createLightTask } from "lighttask";
-import { createInMemoryLightTaskPorts } from "lighttask/adapters/memory";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "lighttask/policies";
+import { createMemoryAdapters } from "lighttask/adapters/memory";
+import { defineTaskPolicy, defineTaskPolicies } from "lighttask/policies";
 
-const taskPolicy = createTaskLifecyclePolicy({
+const taskPolicy = defineTaskPolicy({
   initialStatus: "todo",
   statusDefinitions: [
     {
@@ -244,8 +246,8 @@ const taskPolicy = createTaskLifecyclePolicy({
 });
 
 const lighttask = createLightTask(
-  createInMemoryLightTaskPorts({
-    taskPolicies: createTaskPolicyRegistry({
+  createMemoryAdapters({
+    taskPolicies: defineTaskPolicies({
       policies: {
         default: taskPolicy,
       },

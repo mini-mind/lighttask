@@ -73,7 +73,9 @@ export interface TaskLifecyclePolicy {
   requiresRunnable(action: TaskAction): boolean;
 }
 
-export interface CreateTaskLifecyclePolicyInput {
+export type TaskPolicy = TaskLifecyclePolicy;
+
+export interface DefineTaskPolicyInput {
   initialStatus: TaskStatus;
   statusDefinitions: readonly TaskStatusDefinition[];
   actionDefinitions: readonly TaskActionDefinition[];
@@ -116,9 +118,7 @@ function cloneTaskActionDefinition(definition: TaskActionDefinition): TaskAction
   return { ...definition };
 }
 
-export function createTaskLifecyclePolicy(
-  input: CreateTaskLifecyclePolicyInput,
-): TaskLifecyclePolicy {
+export function defineTaskPolicy(input: DefineTaskPolicyInput): TaskPolicy {
   const statusDefinitions = input.statusDefinitions.map(cloneTaskStatusDefinition);
   if (statusDefinitions.length === 0) {
     throw new Error("Task lifecycle policy 至少需要一个状态定义");

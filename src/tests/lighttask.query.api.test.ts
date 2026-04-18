@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createLightTask } from "../index";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "../policies";
+import { defineTaskPolicies, defineTaskPolicy } from "../policies";
 import {
   DEFAULT_TASK_POLICY_ID,
   createTestLightTask,
@@ -46,9 +46,9 @@ test("Query API：tasks.list 统一围绕 status 与 planId 过滤", () => {
 test("Query API：自定义 taskPolicy 的陌生状态 key 也能被正常过滤", () => {
   const lighttask = createLightTask(
     createTestLightTaskOptions({
-      taskPolicies: createTaskPolicyRegistry({
+      taskPolicies: defineTaskPolicies({
         policies: {
-          custom_query: createTaskLifecyclePolicy({
+          custom_query: defineTaskPolicy({
             initialStatus: "ready_for_work",
             statusDefinitions: [
               {

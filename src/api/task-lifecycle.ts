@@ -1,9 +1,9 @@
 import type { PlanRecord } from "../models";
-import type { TaskPolicy, TaskPolicyRegistry, TaskStatusDefinition } from "../policies";
+import type { TaskPolicies, TaskPolicy, TaskStatusDefinition } from "../policies";
 import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
 import type { CreateLightTaskOptions, PersistedLightTask } from "./types";
 
-export function resolveTaskPolicyRegistry(options: CreateLightTaskOptions): TaskPolicyRegistry {
+export function resolveTaskPolicies(options: CreateLightTaskOptions): TaskPolicies {
   // Task 策略已经完全交给应用层注册，内核不再偷偷回退到预设状态机。
   if (options.taskPolicies) {
     return options.taskPolicies;
@@ -49,7 +49,7 @@ export function requireTaskPolicyById(
     );
   }
 
-  const taskPolicy = resolveTaskPolicyRegistry(options).get(normalizedTaskPolicyId);
+  const taskPolicy = resolveTaskPolicies(options).get(normalizedTaskPolicyId);
   if (taskPolicy) {
     return taskPolicy;
   }

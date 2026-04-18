@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LightTaskError, createLightTask } from "../index";
-import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "../policies";
+import { defineTaskPolicies, defineTaskPolicy } from "../policies";
 import { createExampleTaskLifecycle, createTestLightTaskOptions } from "./adapters-fixture";
 
 const CUSTOM_TASK_POLICY_ID = "custom_lifecycle";
 
 test("Lifecycle API：createLightTask 支持注入自定义 taskPolicies", () => {
-  const customTaskLifecycle = createTaskLifecyclePolicy({
+  const customTaskLifecycle = defineTaskPolicy({
     initialStatus: "ready_for_work",
     statusDefinitions: [
       {
@@ -57,7 +57,7 @@ test("Lifecycle API：createLightTask 支持注入自定义 taskPolicies", () =>
 
   const lighttask = createLightTask(
     createTestLightTaskOptions({
-      taskPolicies: createTaskPolicyRegistry({
+      taskPolicies: defineTaskPolicies({
         policies: {
           [CUSTOM_TASK_POLICY_ID]: customTaskLifecycle,
         },
@@ -108,10 +108,10 @@ test("Lifecycle API：同一个内核实例里的不同 Plan 可绑定不同 tas
   const readyPolicyId = "ready_policy";
   const lighttask = createLightTask(
     createTestLightTaskOptions({
-      taskPolicies: createTaskPolicyRegistry({
+      taskPolicies: defineTaskPolicies({
         policies: {
           default: createExampleTaskLifecycle(),
-          [readyPolicyId]: createTaskLifecyclePolicy({
+          [readyPolicyId]: defineTaskPolicy({
             initialStatus: "ready_for_work",
             statusDefinitions: [
               {

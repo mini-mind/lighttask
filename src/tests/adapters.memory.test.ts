@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  createInMemoryLightTaskPorts,
   createInMemoryNotifyCollector,
   createInMemoryPlanRepository,
   createInMemoryTaskRepository,
+  createMemoryAdapters,
 } from "../adapters/memory";
 import { createCoreError } from "../models";
 import { createExampleTaskPolicies } from "./adapters-fixture";
@@ -57,9 +57,9 @@ test("in-memory notify collector 保持事件快照隔离", () => {
   assert.deepEqual(collector.listPublished()[0].payload, { title: "任务一" });
 });
 
-test("createInMemoryLightTaskPorts 返回完整最小端口集合", () => {
+test("createMemoryAdapters 返回完整最小端口集合", () => {
   const taskPolicies = createExampleTaskPolicies();
-  const ports = createInMemoryLightTaskPorts({
+  const ports = createMemoryAdapters({
     notify: createInMemoryNotifyCollector(),
     planRepository: createInMemoryPlanRepository(),
     taskPolicies,

@@ -404,7 +404,7 @@ export function createInMemoryNotifyCollector<
   };
 }
 
-export interface InMemoryLightTaskPortsOptions<TTaskPolicies = never> {
+export interface MemoryAdaptersOptions<TTaskPolicies = never> {
   taskRepository?: TaskRepository<InMemoryTaskRecord>;
   planRepository?: PlanRepository<PlanRecord>;
   runtimeRepository?: RuntimeRepository<RuntimeRecord>;
@@ -416,7 +416,7 @@ export interface InMemoryLightTaskPortsOptions<TTaskPolicies = never> {
   idGenerator?: IdGeneratorPort;
 }
 
-export interface InMemoryLightTaskPorts<TTaskPolicies = never> {
+export interface MemoryAdapters<TTaskPolicies = never> {
   taskRepository: TaskRepository<InMemoryTaskRecord>;
   planRepository: PlanRepository<PlanRecord>;
   runtimeRepository: RuntimeRepository<RuntimeRecord>;
@@ -428,9 +428,10 @@ export interface InMemoryLightTaskPorts<TTaskPolicies = never> {
   idGenerator: IdGeneratorPort;
 }
 
-export function createInMemoryLightTaskPorts<TTaskPolicies = never>(
-  overrides: InMemoryLightTaskPortsOptions<TTaskPolicies>,
-): InMemoryLightTaskPorts<TTaskPolicies> {
+// `adapters/memory` 子路径已经明确了实现介质，公开入口不再重复暴露 ports 术语。
+export function createMemoryAdapters<TTaskPolicies = never>(
+  overrides: MemoryAdaptersOptions<TTaskPolicies>,
+): MemoryAdapters<TTaskPolicies> {
   return {
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<InMemoryTaskRecord>(),
     planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PlanRecord>(),

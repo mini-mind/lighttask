@@ -1,26 +1,24 @@
 import type { TaskStatus } from "../models";
-import type { TaskAction, TaskLifecyclePolicy } from "./rule-task-fsm";
+import type { TaskAction, TaskPolicy } from "./rule-task-fsm";
 
-export type TaskPolicy = TaskLifecyclePolicy;
-
-export interface TaskPolicySummary {
+export interface TaskPolicyInfo {
   id: string;
   initialStatus: TaskStatus;
   statusKeys: TaskStatus[];
   actionKeys: TaskAction[];
 }
 
-export interface TaskPolicyRegistry {
+export interface TaskPolicies {
   get(policyId: string): TaskPolicy | undefined;
-  list(): TaskPolicySummary[];
+  list(): TaskPolicyInfo[];
 }
 
-export interface CreateTaskPolicyRegistryInput {
+export interface DefineTaskPoliciesInput {
   policies: Readonly<Record<string, TaskPolicy>>;
 }
 
-// 任务策略注册表负责把应用层声明的策略稳定暴露给内核，不允许靠隐式默认值兜底。
-export function createTaskPolicyRegistry(input: CreateTaskPolicyRegistryInput): TaskPolicyRegistry {
+// 任务策略集合负责把应用层声明的策略稳定暴露给内核，不允许靠隐式默认值兜底。
+export function defineTaskPolicies(input: DefineTaskPoliciesInput): TaskPolicies {
   const policyMap = new Map<string, TaskPolicy>();
 
   for (const [rawPolicyId, policy] of Object.entries(input.policies)) {
