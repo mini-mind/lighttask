@@ -25,7 +25,12 @@ import type {
   RuntimeRepository,
   TaskRepository,
 } from "../ports";
-import type { RuntimeAction, RuntimeLifecyclePolicy, TaskAction } from "../rules";
+import type {
+  RuntimeAction,
+  RuntimeLifecyclePolicy,
+  TaskAction,
+  TaskLifecyclePolicy,
+} from "../rules";
 
 export interface LightTaskStep {
   id: string;
@@ -138,7 +143,7 @@ export interface PersistedLightOutput extends LightTaskOutput {
 export interface CreateTaskInput {
   planId: string;
   title: string;
-  status?: "draft";
+  status?: TaskStatus;
   summary?: string;
   dependsOnTaskIds?: string[];
   steps?: TaskStepDefinitionInput[];
@@ -351,6 +356,7 @@ export interface CreateLightTaskOptions {
   consistency?: LazyValidatedPort<ConsistencyPort>;
   clock: LazyValidatedPort<ClockPort>;
   idGenerator: LazyValidatedPort<IdGeneratorPort>;
+  taskLifecycle?: TaskLifecyclePolicy;
   runtimeLifecycle?: RuntimeLifecyclePolicy;
 }
 

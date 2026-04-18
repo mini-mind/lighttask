@@ -1,17 +1,21 @@
-import type { TaskAction } from "../rules";
+import type { TaskAction, TaskStepProgressPolicy } from "../rules";
 import { advanceTaskStepsOne, completeAllTaskSteps, resetTaskStepsToTodo } from "./task-snapshot";
 import type { LightTaskStep } from "./types";
 
-export function applyTaskStepProgress(steps: LightTaskStep[], action: TaskAction): LightTaskStep[] {
-  if (action === "complete") {
+export function applyTaskStepProgress(
+  steps: LightTaskStep[],
+  action: TaskAction,
+  policy: TaskStepProgressPolicy,
+): LightTaskStep[] {
+  if (policy === "complete_all") {
     return completeAllTaskSteps(steps);
   }
 
-  if (action === "dispatch" || action === "start") {
+  if (policy === "advance_one") {
     return advanceTaskStepsOne(steps);
   }
 
-  if (action === "return_to_draft" || action === "finalize") {
+  if (policy === "none" && (action === "finalize" || action === "return_to_draft")) {
     return resetTaskStepsToTodo(steps);
   }
 

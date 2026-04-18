@@ -374,37 +374,40 @@ export function createInMemoryNotifyCollector<
   };
 }
 
-export interface InMemoryLightTaskPortsOptions {
+export interface InMemoryLightTaskPortsOptions<TTaskLifecycle = never> {
   taskRepository?: TaskRepository<InMemoryTaskRecord>;
   planRepository?: PlanRepository<PlanRecord>;
   runtimeRepository?: RuntimeRepository<RuntimeRecord>;
   outputRepository?: OutputRepository<OutputRecord>;
+  taskLifecycle?: TTaskLifecycle;
   notify?: NotifyPort<DomainEvent>;
   consistency?: ConsistencyPort;
   clock?: ClockPort;
   idGenerator?: IdGeneratorPort;
 }
 
-export interface InMemoryLightTaskPorts {
+export interface InMemoryLightTaskPorts<TTaskLifecycle = never> {
   taskRepository: TaskRepository<InMemoryTaskRecord>;
   planRepository: PlanRepository<PlanRecord>;
   runtimeRepository: RuntimeRepository<RuntimeRecord>;
   outputRepository: OutputRepository<OutputRecord>;
+  taskLifecycle?: TTaskLifecycle;
   notify: NotifyPort<DomainEvent>;
   consistency: ConsistencyPort;
   clock: ClockPort;
   idGenerator: IdGeneratorPort;
 }
 
-export function createInMemoryLightTaskPorts(
-  overrides: InMemoryLightTaskPortsOptions = {},
-): InMemoryLightTaskPorts {
+export function createInMemoryLightTaskPorts<TTaskLifecycle = never>(
+  overrides: InMemoryLightTaskPortsOptions<TTaskLifecycle> = {},
+): InMemoryLightTaskPorts<TTaskLifecycle> {
   return {
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<InMemoryTaskRecord>(),
     planRepository: overrides.planRepository ?? createInMemoryPlanRepository<PlanRecord>(),
     runtimeRepository:
       overrides.runtimeRepository ?? createInMemoryRuntimeRepository<RuntimeRecord>(),
     outputRepository: overrides.outputRepository ?? createInMemoryOutputRepository<OutputRecord>(),
+    taskLifecycle: overrides.taskLifecycle,
     notify: overrides.notify ?? createInMemoryNotifyCollector(),
     consistency: overrides.consistency ?? createNoopConsistencyPort(),
     clock: overrides.clock ?? createSystemClock(),

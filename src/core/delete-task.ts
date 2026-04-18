@@ -12,6 +12,7 @@ import {
 } from "./notify-event";
 import { clonePersistedPlan } from "./plan-snapshot";
 import { buildPlanSchedulingFacts } from "./task-dependency-snapshot";
+import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -227,7 +228,7 @@ export function deleteTaskUseCase(
     }
 
     // 删除后不持久化调度事实，但在一致性边界内提前重建一次，确保兜底校验不会炸。
-    buildPlanSchedulingFacts(storedTask.planId, listTasks());
+    buildPlanSchedulingFacts(storedTask.planId, listTasks(), resolveTaskLifecyclePolicy(options));
 
     for (const updatedPeerTask of updatedPeerTasks) {
       publishTaskUpdatedEvent(publishEvent, updatedPeerTask);

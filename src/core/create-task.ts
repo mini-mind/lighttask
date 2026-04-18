@@ -1,4 +1,5 @@
 import { createTaskRecord } from "../data-structures";
+import type { TaskStatus } from "../data-structures";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -6,6 +7,7 @@ import {
 } from "./lighttask-error";
 import { publishTaskCreatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { assertTaskDependencies, normalizeDependsOnTaskIds } from "./task-dependency-snapshot";
+import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { normalizeDefinitionSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -17,7 +19,7 @@ import type {
 function buildCreateTaskFingerprint(input: {
   planId: string;
   title: string;
-  status?: "draft";
+  status?: TaskStatus;
   summary?: string;
   dependsOnTaskIds: string[];
   steps: unknown[];
@@ -39,13 +41,14 @@ export function createTaskUseCase(
     options.taskRepository?.create,
     "taskRepository.create",
   );
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const nextTaskId = requireLightTaskFunction(
     options.idGenerator?.nextTaskId,
     "idGenerator.nextTaskId",
   );
   const planId = input.planId.trim();
   const title = input.title.trim();
-  const status = input.status ?? "draft";
+  const status = input.status ?? taskLifecycle.initialStatus;
   const dependsOnTaskIds = normalizeDependsOnTaskIds(input.dependsOnTaskIds);
 
   if (!planId) {
@@ -58,9 +61,12 @@ export function createTaskUseCase(
       createLightTaskError("VALIDATION_ERROR", "任务标题不能为空", { title: input.title }),
     );
   }
-  if (status !== "draft") {
+  if (status !== taskLifecycle.initialStatus) {
     throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "createTask 初始状态只允许 draft", { status }),
+      createLightTaskError("STATE_CONFLICT", "createTask 初始状态只允许生命周期策略的初始状态", {
+        status,
+        initialStatus: taskLifecycle.initialStatus,
+      }),
     );
   }
   if (!getPlan(planId)) {

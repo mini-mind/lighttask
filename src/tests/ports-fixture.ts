@@ -24,6 +24,7 @@ export function createTestLightTaskOptions(
     consistency: overrides.consistency ?? createNoopConsistencyPort(),
     clock: overrides.clock ?? createSystemClock(),
     idGenerator: overrides.idGenerator ?? createTaskIdGenerator(),
+    taskLifecycle: overrides.taskLifecycle,
     runtimeLifecycle: overrides.runtimeLifecycle,
   };
 }

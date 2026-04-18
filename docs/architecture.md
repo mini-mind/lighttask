@@ -1,10 +1,8 @@
 # LightTask 架构
 
-说明：本文档描述的是当前实现已经采用的架构；如果你想追溯这轮重构的阶段划分和验收标准，可继续参考 [docs/plan.md](plan.md)。
-
 ## 1. 架构一句话
 
-LightTask 的终局架构是：
+LightTask 的架构是：
 
 - `Plan` 只是任务分组边界
 - `Task` 是唯一真源对象
@@ -35,7 +33,7 @@ LightTask 的终局架构是：
 
 ### `rules`
 
-- 定义任务状态机
+- 定义任务生命周期策略与默认状态机
 - 定义依赖约束与调度计算规则
 - 定义 revision 与幂等规则
 
@@ -54,7 +52,7 @@ LightTask 的终局架构是：
 
 ### `Plan`
 
-`Plan` 的职责以后只剩两件事：
+`Plan` 的职责只剩两件事：
 
 - 表示一组任务的容器边界
 - 承接分组级元信息
@@ -66,11 +64,11 @@ LightTask 的终局架构是：
 - 确认流程
 - 冻结依赖基线
 
-因此，终局方向下 `Plan` 不再需要独立生命周期状态机。
+因此，`Plan` 不再需要独立生命周期状态机。
 
 ### `Task`
 
-`Task` 是以后唯一的编排真源。
+`Task` 是唯一的编排真源。
 
 它直接承接：
 
@@ -87,7 +85,8 @@ LightTask 的终局架构是：
 
 补充冻结：
 
-- `createTask` 初始只允许创建 `draft`
+- 默认内置策略下，`createTask` 初始只允许创建 `draft`
+- 若注入了自定义 `taskLifecycle`，`createTask` 只允许创建该策略的 `initialStatus`
 - `planId` 创建后不可迁移
 - 风险不回写成新的任务字段，而是留在调度视图里表达
 
@@ -121,9 +120,9 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 
 ## 4. 状态模型
 
-终局方向使用单轴任务状态。
+LightTask 使用单轴任务状态，并通过任务生命周期策略解释这些状态的系统性质。
 
-推荐内置状态集：
+默认内置状态集：
 
 - `draft`
 - `todo`
@@ -153,9 +152,17 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 除此之外，不再支持任意回退。  
 如果应用层业务上要“重做已开始甚至已完成的任务”，应新建一个新的 `Task`。
 
+### 生命周期边界
+
+- 默认 8 态只是内置默认策略
+- `createLightTask({ taskLifecycle })` 可注入自定义任务生命周期策略
+- `advanceTask / updateTask / getPlanSchedulingFacts` 统一读取任务生命周期策略
+- `Task.status` 是 `string`，状态合法性由 `taskLifecycle` 注册表约束
+- 应用层若需要更多业务语义，应优先在自己的字段中扩展
+
 ## 5. 编辑权限边界
 
-终局方向下，LightTask 负责区分“任务定义编辑”和“任务运行推进”。
+LightTask 负责区分“任务定义编辑”和“任务运行推进”。
 
 ### 应用层可编辑
 
@@ -215,7 +222,7 @@ type Task = {
 
 ## 7. 调度模型
 
-终局方向下，`getPlanSchedulingFacts` 不再读取图快照，而是直接读取某个 `Plan` 下的全部 `Task`。
+`getPlanSchedulingFacts` 直接读取某个 `Plan` 下的全部 `Task`。
 
 ### 调度输入
 
@@ -256,12 +263,11 @@ type Task = {
 
 ### 关键规则
 
-- `draft` 自己不可执行
-- 依赖 `draft` 任务的后继任务被阻塞
-- 依赖未满足的上游任务被阻塞
-- 依赖 `failed / cancelled` 上游的任务被阻塞，但要和“尚未完成”区分原因
-- `dispatched / running / blocked_by_approval` 属于 active，不再属于 runnable
-- 终态任务不再参与可执行计算
+- 可编辑状态会落入 `draftTaskIds`
+- 可调度状态在依赖满足时进入 `runnableTaskIds`
+- `active = true` 的状态进入 `activeTaskIds`
+- `terminal = true` 的状态进入 `terminalTaskIds`
+- 依赖状态的 `completionOutcome` 会进一步区分 `dependency_not_done / dependency_failed / dependency_cancelled`
 - 调度事实要同时表达“是否可执行”和“为什么不可执行/为什么有风险”
 
 ### 返工风险规则
@@ -295,7 +301,7 @@ LightTask 对删除任务只做系统层兜底，不做产品层治理。
 
 ## 9. 事件边界
 
-终局方向下，事件主线也应跟着瘦身。
+事件主线采用精简聚合模型。
 
 建议保留：
 
@@ -350,9 +356,9 @@ LightTask 不负责：
 
 ## 12. 结论
 
-终局方向不是“把 Graph 缩小”，而是：
+LightTask 不是“把 Graph 缩小”，而是：
 
-- 彻底改成 `Task-only`
+- 以 `Plan + Task + Runtime + Output` 作为主模型
 - 让 `Plan` 退回分组意义
 - 让 `draft` 直接成为任务状态的一部分
 - 让应用层围绕任务本身组织产品，而不是围绕图快照组织产品

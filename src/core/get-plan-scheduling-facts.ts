@@ -4,6 +4,7 @@ import {
   throwLightTaskError,
 } from "./lighttask-error";
 import { buildPlanSchedulingFacts } from "./task-dependency-snapshot";
+import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import type { CreateLightTaskOptions, GetPlanSchedulingFactsResult } from "./types";
 
 export function getPlanSchedulingFactsUseCase(
@@ -23,5 +24,9 @@ export function getPlanSchedulingFactsUseCase(
     );
   }
 
-  return buildPlanSchedulingFacts(normalizedPlanId, listTasks());
+  return buildPlanSchedulingFacts(
+    normalizedPlanId,
+    listTasks(),
+    resolveTaskLifecyclePolicy(options),
+  );
 }

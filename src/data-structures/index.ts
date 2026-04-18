@@ -13,6 +13,7 @@ export {
   DEFAULT_RUNTIME_TERMINAL_STATUSES,
   DEFAULT_TASK_TERMINAL_STATUSES,
   TASK_STATUSES,
+  isDefaultTaskStatus,
   isTaskActiveStatus,
   isTaskStatus,
   isTaskTerminalStatus,

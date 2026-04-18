@@ -1,6 +1,6 @@
 import { bumpRevision } from "../data-structures";
-import { assertExpectedRevision, transitionTaskStatus } from "../rules";
 import { decideIdempotency } from "../rules";
+import { assertExpectedRevision } from "../rules";
 import {
   createLightTaskError,
   requireLightTaskFunction,
@@ -8,6 +8,7 @@ import {
 } from "./lighttask-error";
 import { publishTaskAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
 import { buildPlanSchedulingFacts } from "./task-dependency-snapshot";
+import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { applyTaskStepProgress } from "./task-progress";
 import { clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type {
@@ -26,12 +27,17 @@ function buildAdvanceTaskFingerprint(taskId: string, input: AdvanceTaskInput): s
 }
 
 function assertTaskActionAllowed(
+  options: CreateLightTaskOptions,
   task: PersistedLightTask,
   input: AdvanceTaskInput,
   allTasks: PersistedLightTask[],
 ): void {
   if (input.action === "dispatch") {
-    const facts = buildPlanSchedulingFacts(task.planId, allTasks);
+    const facts = buildPlanSchedulingFacts(
+      task.planId,
+      allTasks,
+      resolveTaskLifecyclePolicy(options),
+    );
     if (!facts.byTaskId[task.id]?.isRunnable) {
       throwLightTaskError(
         createLightTaskError("STATE_CONFLICT", "dispatch 只允许推进当前 runnable 任务", {
@@ -50,6 +56,7 @@ export function advanceTaskUseCase(
   input: AdvanceTaskInput,
 ): LightTaskTask {
   const publishEvent = resolveNotifyPublisher(options);
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const getTask = requireLightTaskFunction(options.taskRepository?.get, "taskRepository.get");
   const listTasks = requireLightTaskFunction(options.taskRepository?.list, "taskRepository.list");
   const saveIfRevisionMatches = requireLightTaskFunction(
@@ -85,9 +92,9 @@ export function advanceTaskUseCase(
   }
 
   assertExpectedRevision(storedTask.revision, input.expectedRevision);
-  assertTaskActionAllowed(storedTask, input, listTasks());
+  assertTaskActionAllowed(options, storedTask, input, listTasks());
 
-  const transition = transitionTaskStatus(storedTask.status, input.action);
+  const transition = taskLifecycle.transition(storedTask.status, input.action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }
@@ -96,7 +103,11 @@ export function advanceTaskUseCase(
   const nextTask: PersistedLightTask = {
     ...clonePersistedTask(storedTask),
     status: transition.status,
-    steps: applyTaskStepProgress(storedTask.steps, input.action),
+    steps: applyTaskStepProgress(
+      storedTask.steps,
+      input.action,
+      taskLifecycle.resolveStepProgress(input.action),
+    ),
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,

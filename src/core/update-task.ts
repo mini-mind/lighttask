@@ -8,6 +8,7 @@ import {
 } from "./lighttask-error";
 import { publishTaskUpdatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { assertTaskDependencies, normalizeDependsOnTaskIds } from "./task-dependency-snapshot";
+import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { clonePersistedTask, normalizeDefinitionSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -55,6 +56,7 @@ export function updateTaskUseCase(
     options.taskRepository?.saveIfRevisionMatches,
     "taskRepository.saveIfRevisionMatches",
   );
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
   const clockNow = requireLightTaskFunction(options.clock?.now, "clock.now");
   const normalizedTaskId = taskId.trim();
   if (!normalizedTaskId) {
@@ -79,9 +81,9 @@ export function updateTaskUseCase(
       }),
     );
   }
-  if (storedTask.status !== "draft") {
+  if (!taskLifecycle.getStatusDefinition(storedTask.status)?.editable) {
     throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "只有 draft 任务允许修改定义字段", {
+      createLightTaskError("STATE_CONFLICT", "只有可编辑状态的任务允许修改定义字段", {
         taskId: normalizedTaskId,
         currentStatus: storedTask.status,
       }),

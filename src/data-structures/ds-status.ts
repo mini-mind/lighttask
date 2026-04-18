@@ -9,7 +9,7 @@ export const TASK_STATUSES = [
   "cancelled",
 ] as const;
 
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type TaskStatus = string;
 
 export type RuntimeLifecycleStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -27,6 +27,10 @@ const taskActiveStatuses = new Set<string>(DEFAULT_TASK_ACTIVE_STATUSES);
 const runtimeTerminalStatuses = new Set<string>(DEFAULT_RUNTIME_TERMINAL_STATUSES);
 
 export function isTaskStatus(status: string): status is TaskStatus {
+  return status.trim().length > 0;
+}
+
+export function isDefaultTaskStatus(status: string): boolean {
   return taskStatuses.has(status);
 }
 

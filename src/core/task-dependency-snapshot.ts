@@ -1,4 +1,4 @@
-import { isTaskActiveStatus, isTaskTerminalStatus } from "../data-structures";
+import { type TaskLifecyclePolicy, defaultTaskLifecyclePolicy } from "../rules";
 import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
 import type {
   GetPlanSchedulingFactsResult,
@@ -57,6 +57,33 @@ export function normalizeDependsOnTaskIds(dependsOnTaskIds: string[] | undefined
 
 function createTaskMap(tasks: PersistedLightTask[]): Map<string, PersistedLightTask> {
   return new Map(tasks.map((task) => [task.id, task]));
+}
+
+function getTaskStatusDefinition(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask) {
+  return taskLifecycle.getStatusDefinition(task.status);
+}
+
+function isTaskEditable(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
+  return getTaskStatusDefinition(taskLifecycle, task)?.editable ?? false;
+}
+
+function isTaskActive(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
+  return getTaskStatusDefinition(taskLifecycle, task)?.active ?? false;
+}
+
+function isTaskTerminal(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
+  return getTaskStatusDefinition(taskLifecycle, task)?.terminal ?? false;
+}
+
+function isTaskSchedulable(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
+  return getTaskStatusDefinition(taskLifecycle, task)?.schedulable ?? false;
+}
+
+function getTaskCompletionOutcome(
+  taskLifecycle: TaskLifecyclePolicy,
+  task: PersistedLightTask,
+): "success" | "failed" | "cancelled" | undefined {
+  return getTaskStatusDefinition(taskLifecycle, task)?.completionOutcome;
 }
 
 function assertNoCycle(
@@ -162,6 +189,7 @@ type MutableFact = {
 export function buildPlanSchedulingFacts(
   planId: string,
   tasks: PersistedLightTask[],
+  taskLifecycle: TaskLifecyclePolicy = defaultTaskLifecyclePolicy,
 ): GetPlanSchedulingFactsResult {
   const planTasks = tasks
     .filter((task) => task.planId === planId)
@@ -202,7 +230,7 @@ export function buildPlanSchedulingFacts(
     const missingDependencyTaskIds = new Set<string>();
     const riskyDependencyTaskIds = new Set<string>();
 
-    if (task.status === "draft") {
+    if (isTaskEditable(taskLifecycle, task)) {
       blockReasonCodes.add("self_draft");
     }
 
@@ -215,8 +243,11 @@ export function buildPlanSchedulingFacts(
         continue;
       }
 
-      if (dependencyTask.status === "draft") {
-        if (isTaskActiveStatus(task.status) || task.status === "completed") {
+      if (isTaskEditable(taskLifecycle, dependencyTask)) {
+        if (
+          isTaskActive(taskLifecycle, task) ||
+          getTaskCompletionOutcome(taskLifecycle, task) === "success"
+        ) {
           riskReasonCodes.add("upstream_returned_to_draft");
           riskyDependencyTaskIds.add(dependencyTaskId);
         } else {
@@ -226,28 +257,28 @@ export function buildPlanSchedulingFacts(
         continue;
       }
 
-      if (dependencyTask.status === "failed") {
+      if (getTaskCompletionOutcome(taskLifecycle, dependencyTask) === "failed") {
         blockReasonCodes.add("dependency_failed");
         unmetDependencyTaskIds.add(dependencyTaskId);
         continue;
       }
 
-      if (dependencyTask.status === "cancelled") {
+      if (getTaskCompletionOutcome(taskLifecycle, dependencyTask) === "cancelled") {
         blockReasonCodes.add("dependency_cancelled");
         unmetDependencyTaskIds.add(dependencyTaskId);
         continue;
       }
 
-      if (dependencyTask.status !== "completed") {
+      if (getTaskCompletionOutcome(taskLifecycle, dependencyTask) !== "success") {
         blockReasonCodes.add("dependency_not_done");
         unmetDependencyTaskIds.add(dependencyTaskId);
       }
     }
 
-    const isDraft = task.status === "draft";
-    const isTerminal = isTaskTerminalStatus(task.status);
-    const isActive = isTaskActiveStatus(task.status);
-    const isRunnable = task.status === "todo" && blockReasonCodes.size === 0;
+    const isDraft = isTaskEditable(taskLifecycle, task);
+    const isTerminal = isTaskTerminal(taskLifecycle, task);
+    const isActive = isTaskActive(taskLifecycle, task);
+    const isRunnable = isTaskSchedulable(taskLifecycle, task) && blockReasonCodes.size === 0;
     const isBlocked = !isDraft && !isRunnable && !isActive && !isTerminal;
     const isRisky = riskReasonCodes.size > 0;
 

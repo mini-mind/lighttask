@@ -6,16 +6,27 @@ export type {
 export type {
   CreateTaskLifecyclePolicyInput,
   TaskAction,
+  TaskLifecycleApplyInput,
+  TaskLifecycleGuardInput,
+  TaskLifecycleHooks,
   TaskLifecyclePolicy,
+  TaskLifecycleNotifyInput,
   TaskStepProgressPolicy,
+  TaskStatusDefinition,
+  TaskStatusTransitionDefinition,
   TaskTransitionResult,
 } from "./rule-task-fsm";
 export {
   canTaskTransition,
   createTaskLifecyclePolicy,
   defaultTaskLifecyclePolicy,
+  getTaskStatusDefinition,
   getNextTaskStatus,
+  isTaskEditableStatus,
+  isTaskSchedulableStatus,
+  listTaskStatuses,
   resolveTaskStepProgress,
+  listTaskTransitions,
   transitionTaskStatus,
   listTaskActions,
 } from "./rule-task-fsm";

@@ -1,10 +1,8 @@
 # LightTask 应用层接入指南
 
-说明：本指南描述的是当前实现已经采用的接入方式；如果你想看这轮重构的阶段拆解和验收口径，可继续参考 [docs/plan.md](plan.md)。
-
 这份指南只回答一件事：
 
-`应用层以后应该怎样在不依赖 Graph 的前提下接入 LightTask。`
+`应用层应该怎样在不依赖 Graph 的前提下接入 LightTask。`
 
 ## 1. 先记住四句话
 
@@ -25,7 +23,7 @@
 - 每个 `Task` 必须属于且只属于一个 `Plan`
 - 依赖只能发生在同一个 `Plan` 内
 
-## 2. 应用层以后怎么组织自己的数据
+## 2. 应用层怎么组织自己的数据
 
 推荐把应用层的数据理解为两层：
 
@@ -55,6 +53,10 @@
 - 应用层管“用户正在怎么编辑产品”
 - LightTask 管“任务如何被稳定编排和推进”
 
+再补一条边界：
+
+- 应用层若需要更多业务状态语义，优先放在自己的字段中表达，而不是要求 LightTask 不断增加核心状态字段
+
 ## 3. 推荐接入主链
 
 ### 第一步：先建 `Plan`
@@ -66,11 +68,11 @@ lighttask.createPlan({
 });
 ```
 
-以后 `Plan` 不再是“启动流程”的对象，只是这个需求下任务的分组容器。
+`Plan` 只是这个需求下任务的分组容器。
 
-### 第二步：先建 `draft` 任务
+### 第二步：先建任务
 
-应用层把“还在编辑中的任务”直接建成 `draft`：
+默认内置策略下，应用层把“还在编辑中的任务”直接建成 `draft`：
 
 ```ts
 lighttask.createTask({
@@ -87,6 +89,8 @@ lighttask.createTask({
 - 但不能执行
 - 也会阻塞依赖它的下游任务
 - 创建入口本身也不应允许直接创建成 `todo` 或其他正式态
+
+如果应用层注入了自定义 `taskLifecycle`，那么 `createTask` 会改为使用该策略的 `initialStatus`。
 
 ### 第三步：只在 `draft` 态编辑任务定义
 
@@ -119,7 +123,7 @@ lighttask.advanceTask(taskId, {
 });
 ```
 
-以后不再需要：
+不需要：
 
 - 先画 Graph
 - 再发布 Graph
@@ -158,6 +162,8 @@ const facts = lighttask.getPlanSchedulingFacts("plan_alpha");
 
 ## 4. `draft` 和 `todo` 应该怎么理解
 
+以下解释针对默认内置策略。若你已经注入自定义 `taskLifecycle`，应把这里的 `draft / todo / completed` 等词，替换成你自己策略里的对应状态定义。
+
 ### `draft`
 
 表示：
@@ -173,7 +179,7 @@ const facts = lighttask.getPlanSchedulingFacts("plan_alpha");
 
 - 这条任务已经编辑完成
 - 正式进入待办
-- 可以参与后续调度
+- 可以参与正式调度
 - 定义字段不再允许应用层直接改
 
 ### `todo -> draft`
@@ -202,9 +208,61 @@ LightTask 不会负责：
 
 这些都交给应用层处理。
 
-## 5. 以后不该怎么接
+## 5. 什么时候要自定义 `taskLifecycle`
 
-以下接法以后不再推荐：
+大多数接入方直接用默认 8 态就够了。你只在下面这些场景考虑自定义：
+
+- 你的产品里没有 `draft -> todo -> dispatched -> running -> completed` 这条默认链
+- 你希望任务创建后直接进入 `todo`，而不是先落在 `draft`
+- 你需要更少的状态，或者需要替换动作名和转移规则
+
+接入方式：
+
+```ts
+import { createLightTask } from "lighttask";
+import { createInMemoryLightTaskPorts } from "lighttask/ports/in-memory";
+import { createTaskLifecyclePolicy } from "lighttask/rules";
+
+const taskLifecycle = createTaskLifecyclePolicy({
+  initialStatus: "todo",
+  statusDefinitions: [
+    {
+      key: "todo",
+      editable: false,
+      schedulable: true,
+      active: false,
+      terminal: false,
+    },
+    {
+      key: "completed",
+      editable: false,
+      schedulable: false,
+      active: false,
+      terminal: true,
+      completionOutcome: "success",
+    },
+  ],
+  transitionDefinitions: [
+    { from: "todo", action: "complete", to: "completed" },
+  ],
+  terminalStatuses: ["completed"],
+});
+
+const lighttask = createLightTask(
+  createInMemoryLightTaskPorts({
+    taskLifecycle,
+  }),
+);
+```
+
+这里要记住两条边界：
+
+- 自定义 `taskLifecycle` 已经可以驱动 `createTask / advanceTask / updateTask / getPlanSchedulingFacts`
+- `TaskStatus` 现在已经放开成 `string`，但状态是否合法仍必须由你传入的 `taskLifecycle` 先注册
+
+## 6. 不推荐的接法
+
+以下接法不推荐：
 
 - 先把任务关系画成 Graph，再把 Graph 视为真源
 - 依赖 `publishGraph`
@@ -214,9 +272,9 @@ LightTask 不会负责：
 
 这些都会让接入链路更长，也会让应用层心智更重。
 
-## 6. 删除任务的推荐理解
+## 7. 删除任务的推荐理解
 
-以后删除某个任务时：
+删除某个任务时：
 
 - LightTask 自动解除同一 `Plan` 内其他任务对它的依赖
 - LightTask 重新计算调度事实
@@ -234,7 +292,7 @@ LightTask 不会负责：
 - 内核只保证删了以后系统依赖关系不会炸
 - 产品级治理由应用层自己承担
 
-## 7. 应用层最需要关心的两个输出
+## 8. 应用层最需要关心的两个输出
 
 ### `blockReasonCodes`
 
@@ -273,9 +331,9 @@ LightTask 不会负责：
 同样地，风险也应按“原因代码数组”理解，而不是假设只有单一风险标签。
 
 
-## 8. 哪些能力不要往内核里塞
+## 9. 哪些能力不要往内核里塞
 
-这些以后仍应留在应用层：
+这些能力应留在应用层：
 
 - 流程图编辑器
 - 页面布局
@@ -287,9 +345,9 @@ LightTask 不会负责：
 
 LightTask 只负责稳定的公共编排语义，不负责替应用层做完整产品。
 
-## 9. 一句话接入建议
+## 10. 一句话接入建议
 
-以后应用层接 LightTask，推荐主链应当是：
+应用层接 LightTask，推荐主链应当是：
 
 ```text
 业务对象/草稿
