@@ -73,12 +73,12 @@ test("Scheduling Facts：能区分 draft/runnable/blocked/active/terminal/risk",
   assert.equal(terminalCompleted.status, "completed");
 
   const facts = lighttask.getPlanSchedulingFacts(planId);
-  assert.deepEqual(facts.draftTaskIds, [draft.id]);
+  assert.deepEqual(facts.editableTaskIds, [draft.id]);
   assert.deepEqual(facts.runnableTaskIds, [runnable.id]);
   assert.deepEqual(facts.blockedTaskIds, [blocked.id]);
   assert.deepEqual(facts.activeTaskIds, [active.id]);
   assert.deepEqual(facts.terminalTaskIds, [terminal.id]);
-  assert.deepEqual(facts.byTaskId[blocked.id].blockReasonCodes, ["dependency_in_draft"]);
+  assert.deepEqual(facts.byTaskId[blocked.id].blockReasonCodes, ["dependency_not_schedulable"]);
 });
 
 test("Scheduling Facts：todo 返回 draft 后，已开始下游被标记为风险", () => {
@@ -118,8 +118,10 @@ test("Scheduling Facts：todo 返回 draft 后，已开始下游被标记为风�
     title: "风险计划",
   });
   const facts = lighttask.getPlanSchedulingFacts(planId);
-  assert.deepEqual(facts.riskTaskIds, ["task_downstream"]);
-  assert.deepEqual(facts.byTaskId.task_downstream.riskReasonCodes, ["upstream_returned_to_draft"]);
+  assert.deepEqual(facts.riskyTaskIds, ["task_downstream"]);
+  assert.deepEqual(facts.byTaskId.task_downstream.riskReasonCodes, [
+    "upstream_became_not_schedulable",
+  ]);
 });
 
 test("Scheduling Facts：failed/cancelled/missing 依赖会映射到明确阻塞原因", () => {

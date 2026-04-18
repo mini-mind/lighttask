@@ -8,7 +8,7 @@ import {
 } from "./lighttask-error";
 import { publishTaskUpdatedEvent, resolveNotifyPublisher } from "./notify-event";
 import { assertTaskDependencies, normalizeDependsOnTaskIds } from "./task-dependency-snapshot";
-import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
+import { requireTaskStatusDefinition, resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { clonePersistedTask, normalizeDefinitionSteps, toPublicTask } from "./task-snapshot";
 import type {
   CreateLightTaskOptions,
@@ -81,7 +81,11 @@ export function updateTaskUseCase(
       }),
     );
   }
-  if (!taskLifecycle.getStatusDefinition(storedTask.status)?.editable) {
+  if (
+    !requireTaskStatusDefinition(taskLifecycle, storedTask.status, {
+      taskId: normalizedTaskId,
+    }).editable
+  ) {
     throwLightTaskError(
       createLightTaskError("STATE_CONFLICT", "只有可编辑状态的任务允许修改定义字段", {
         taskId: normalizedTaskId,

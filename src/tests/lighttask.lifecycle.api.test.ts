@@ -34,6 +34,10 @@ test("Lifecycle API：createLightTask 支持注入自定义 taskLifecycle", () =
         completionOutcome: "success",
       },
     ],
+    actionDefinitions: [
+      { key: "dispatch", requiresRunnable: true, stepProgress: "advance_one" },
+      { key: "complete", stepProgress: "complete_all" },
+    ],
     transitionDefinitions: [
       {
         from: "ready_for_work",
@@ -47,10 +51,6 @@ test("Lifecycle API：createLightTask 支持注入自定义 taskLifecycle", () =
       },
     ],
     terminalStatuses: ["done_for_now"],
-    stepProgressByAction: {
-      dispatch: "advance_one",
-      complete: "complete_all",
-    },
   });
 
   const lighttask = createLightTask(

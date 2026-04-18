@@ -1,4 +1,4 @@
-import { type TaskLifecyclePolicy, defaultTaskLifecyclePolicy } from "../rules";
+import type { TaskLifecyclePolicy, TaskStatusDefinition } from "../rules";
 import { createLightTaskError, throwLightTaskError } from "./lighttask-error";
 import type {
   GetPlanSchedulingFactsResult,
@@ -59,31 +59,53 @@ function createTaskMap(tasks: PersistedLightTask[]): Map<string, PersistedLightT
   return new Map(tasks.map((task) => [task.id, task]));
 }
 
-function getTaskStatusDefinition(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask) {
-  return taskLifecycle.getStatusDefinition(task.status);
+function requireTaskStatusDefinition(
+  taskLifecycle: TaskLifecyclePolicy,
+  task: PersistedLightTask,
+): TaskStatusDefinition {
+  const definition = taskLifecycle.getStatusDefinition(task.status);
+  if (definition) {
+    return definition;
+  }
+
+  throwLightTaskError(
+    createLightTaskError("INVARIANT_VIOLATION", "任务状态未注册到 taskLifecycle，拒绝参与调度", {
+      taskId: task.id,
+      planId: task.planId,
+      status: task.status,
+    }),
+  );
 }
 
 function isTaskEditable(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
-  return getTaskStatusDefinition(taskLifecycle, task)?.editable ?? false;
+  return requireTaskStatusDefinition(taskLifecycle, task).editable;
 }
 
 function isTaskActive(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
-  return getTaskStatusDefinition(taskLifecycle, task)?.active ?? false;
+  return requireTaskStatusDefinition(taskLifecycle, task).active;
 }
 
 function isTaskTerminal(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
-  return getTaskStatusDefinition(taskLifecycle, task)?.terminal ?? false;
+  return requireTaskStatusDefinition(taskLifecycle, task).terminal;
 }
 
 function isTaskSchedulable(taskLifecycle: TaskLifecyclePolicy, task: PersistedLightTask): boolean {
-  return getTaskStatusDefinition(taskLifecycle, task)?.schedulable ?? false;
+  return requireTaskStatusDefinition(taskLifecycle, task).schedulable;
 }
 
 function getTaskCompletionOutcome(
   taskLifecycle: TaskLifecyclePolicy,
   task: PersistedLightTask,
 ): "success" | "failed" | "cancelled" | undefined {
-  return getTaskStatusDefinition(taskLifecycle, task)?.completionOutcome;
+  return requireTaskStatusDefinition(taskLifecycle, task).completionOutcome;
+}
+
+function isTaskNotSchedulable(
+  taskLifecycle: TaskLifecyclePolicy,
+  task: PersistedLightTask,
+): boolean {
+  const definition = requireTaskStatusDefinition(taskLifecycle, task);
+  return !definition.schedulable && !definition.active && !definition.terminal;
 }
 
 function assertNoCycle(
@@ -171,7 +193,7 @@ export function assertTaskDependencies(input: {
 type MutableFact = {
   taskId: string;
   status: PersistedLightTask["status"];
-  isDraft: boolean;
+  isEditable: boolean;
   isRunnable: boolean;
   isBlocked: boolean;
   isActive: boolean;
@@ -189,7 +211,7 @@ type MutableFact = {
 export function buildPlanSchedulingFacts(
   planId: string,
   tasks: PersistedLightTask[],
-  taskLifecycle: TaskLifecyclePolicy = defaultTaskLifecyclePolicy,
+  taskLifecycle: TaskLifecyclePolicy,
 ): GetPlanSchedulingFactsResult {
   const planTasks = tasks
     .filter((task) => task.planId === planId)
@@ -213,12 +235,12 @@ export function buildPlanSchedulingFacts(
     }
   }
 
-  const draftTaskIds: string[] = [];
+  const editableTaskIds: string[] = [];
   const runnableTaskIds: string[] = [];
   const blockedTaskIds: string[] = [];
   const activeTaskIds: string[] = [];
   const terminalTaskIds: string[] = [];
-  const riskTaskIds: string[] = [];
+  const riskyTaskIds: string[] = [];
   const byTaskId: Record<string, MutableFact> = {};
 
   for (const task of planTasks) {
@@ -230,8 +252,8 @@ export function buildPlanSchedulingFacts(
     const missingDependencyTaskIds = new Set<string>();
     const riskyDependencyTaskIds = new Set<string>();
 
-    if (isTaskEditable(taskLifecycle, task)) {
-      blockReasonCodes.add("self_draft");
+    if (isTaskNotSchedulable(taskLifecycle, task)) {
+      blockReasonCodes.add("self_not_schedulable");
     }
 
     for (const dependencyTaskId of dependencyTaskIds) {
@@ -243,15 +265,15 @@ export function buildPlanSchedulingFacts(
         continue;
       }
 
-      if (isTaskEditable(taskLifecycle, dependencyTask)) {
+      if (isTaskNotSchedulable(taskLifecycle, dependencyTask)) {
         if (
           isTaskActive(taskLifecycle, task) ||
           getTaskCompletionOutcome(taskLifecycle, task) === "success"
         ) {
-          riskReasonCodes.add("upstream_returned_to_draft");
+          riskReasonCodes.add("upstream_became_not_schedulable");
           riskyDependencyTaskIds.add(dependencyTaskId);
         } else {
-          blockReasonCodes.add("dependency_in_draft");
+          blockReasonCodes.add("dependency_not_schedulable");
           unmetDependencyTaskIds.add(dependencyTaskId);
         }
         continue;
@@ -275,17 +297,17 @@ export function buildPlanSchedulingFacts(
       }
     }
 
-    const isDraft = isTaskEditable(taskLifecycle, task);
+    const isEditable = isTaskEditable(taskLifecycle, task);
     const isTerminal = isTaskTerminal(taskLifecycle, task);
     const isActive = isTaskActive(taskLifecycle, task);
     const isRunnable = isTaskSchedulable(taskLifecycle, task) && blockReasonCodes.size === 0;
-    const isBlocked = !isDraft && !isRunnable && !isActive && !isTerminal;
+    const isBlocked = !isEditable && !isRunnable && !isActive && !isTerminal;
     const isRisky = riskReasonCodes.size > 0;
 
     const fact: MutableFact = {
       taskId: task.id,
       status: task.status,
-      isDraft,
+      isEditable,
       isRunnable,
       isBlocked,
       isActive,
@@ -302,31 +324,32 @@ export function buildPlanSchedulingFacts(
 
     byTaskId[task.id] = fact;
 
-    if (isDraft) {
-      draftTaskIds.push(task.id);
-    } else if (isRunnable) {
+    if (isEditable) {
+      editableTaskIds.push(task.id);
+    }
+    if (isRunnable) {
       runnableTaskIds.push(task.id);
     } else if (isActive) {
       activeTaskIds.push(task.id);
     } else if (isTerminal) {
       terminalTaskIds.push(task.id);
-    } else {
+    } else if (isBlocked) {
       blockedTaskIds.push(task.id);
     }
 
     if (isRisky) {
-      riskTaskIds.push(task.id);
+      riskyTaskIds.push(task.id);
     }
   }
 
   return {
     planId,
-    draftTaskIds,
+    editableTaskIds,
     runnableTaskIds,
     blockedTaskIds,
     activeTaskIds,
     terminalTaskIds,
-    riskTaskIds,
+    riskyTaskIds,
     byTaskId,
   };
 }

@@ -4,6 +4,7 @@ export type {
 } from "../data-structures";
 
 export type {
+  TaskActionDefinition,
   CreateTaskLifecyclePolicyInput,
   TaskAction,
   TaskLifecycleApplyInput,
@@ -16,20 +17,7 @@ export type {
   TaskStatusTransitionDefinition,
   TaskTransitionResult,
 } from "./rule-task-fsm";
-export {
-  canTaskTransition,
-  createTaskLifecyclePolicy,
-  defaultTaskLifecyclePolicy,
-  getTaskStatusDefinition,
-  getNextTaskStatus,
-  isTaskEditableStatus,
-  isTaskSchedulableStatus,
-  listTaskStatuses,
-  resolveTaskStepProgress,
-  listTaskTransitions,
-  transitionTaskStatus,
-  listTaskActions,
-} from "./rule-task-fsm";
+export { createTaskLifecyclePolicy } from "./rule-task-fsm";
 
 export type {
   CreateRuntimeLifecyclePolicyInput,

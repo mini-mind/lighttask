@@ -61,6 +61,7 @@ test("Query API：自定义 taskLifecycle 的陌生状态 key 也能被正常过
             completionOutcome: "success",
           },
         ],
+        actionDefinitions: [{ key: "complete", requiresRunnable: true }],
         transitionDefinitions: [
           {
             from: "ready_for_work",

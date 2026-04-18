@@ -37,7 +37,7 @@ test("公共导出契约：data-structures 不再暴露 Graph 能力", () => {
 
 test("公共导出契约：rules 不再暴露 Graph/Plan FSM", () => {
   const exportsMap = requireFromPackage("lighttask/rules") as Record<string, unknown>;
-  assert.equal(typeof exportsMap.transitionTaskStatus, "function");
+  assert.equal(typeof exportsMap.createTaskLifecyclePolicy, "function");
   assert.equal(typeof exportsMap.transitionRuntimeStatus, "function");
   assert.equal("topologicalSort" in exportsMap, false);
   assert.equal("canPlanTransition" in exportsMap, false);

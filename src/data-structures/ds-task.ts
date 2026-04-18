@@ -33,8 +33,8 @@ export interface CreateTaskRecordInput {
   planId: string;
   title: string;
   createdAt: string;
+  status: TaskStatus;
   summary?: string;
-  status?: TaskStatus;
   dependsOnTaskIds?: string[];
   steps?: TaskStepRecord[];
   metadata?: Record<string, unknown>;
@@ -49,7 +49,7 @@ export function createTaskRecord(input: CreateTaskRecordInput): TaskRecord {
     planId: input.planId.trim(),
     title: input.title.trim(),
     summary: input.summary?.trim() || undefined,
-    status: input.status ?? "draft",
+    status: input.status,
     dependsOnTaskIds: cloneOptional(input.dependsOnTaskIds) ?? [],
     steps: cloneOptional(input.steps) ?? [],
     createdAt: input.createdAt,

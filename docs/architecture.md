@@ -33,7 +33,7 @@ LightTask 的架构是：
 
 ### `rules`
 
-- 定义任务生命周期策略与默认状态机
+- 定义任务生命周期策略
 - 定义依赖约束与调度计算规则
 - 定义 revision 与幂等规则
 
@@ -85,8 +85,7 @@ LightTask 的架构是：
 
 补充冻结：
 
-- 默认内置策略下，`createTask` 初始只允许创建 `draft`
-- 若注入了自定义 `taskLifecycle`，`createTask` 只允许创建该策略的 `initialStatus`
+- `createTask` 初始只允许创建 `taskLifecycle.initialStatus`
 - `planId` 创建后不可迁移
 - 风险不回写成新的任务字段，而是留在调度视图里表达
 
@@ -122,43 +121,21 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 
 LightTask 使用单轴任务状态，并通过任务生命周期策略解释这些状态的系统性质。
 
-默认内置状态集：
-
-- `draft`
-- `todo`
-- `dispatched`
-- `running`
-- `blocked_by_approval`
-- `completed`
-- `failed`
-- `cancelled`
-
-### 产品语义
-
-- `draft`：任务仍在编辑中，不能执行
-- `todo`：任务设计完成，可以进入正式待办
-- `dispatched`：已分派
-- `running`：执行中
-- `blocked_by_approval`：等待审批
-- `completed / failed / cancelled`：终态
-
-### 特殊迁移规则
-
-默认方向仍然是向前推进，但为了给应用层容错空间，明确放开一个返工例外：
-
-- `draft -> todo`
-- `todo -> draft`
-
-除此之外，不再支持任意回退。  
-如果应用层业务上要“重做已开始甚至已完成的任务”，应新建一个新的 `Task`。
-
 ### 生命周期边界
 
-- 默认 8 态只是内置默认策略
-- `createLightTask({ taskLifecycle })` 可注入自定义任务生命周期策略
-- `advanceTask / updateTask / getPlanSchedulingFacts` 统一读取任务生命周期策略
-- `Task.status` 是 `string`，状态合法性由 `taskLifecycle` 注册表约束
+- `Task.status` 是 `string`
+- 合法状态必须先在 `taskLifecycle.statusDefinitions` 中注册
+- 合法动作必须先在 `taskLifecycle.actionDefinitions` 中注册
+- `createLightTask({ taskLifecycle })` 必须显式注入任务生命周期策略
+- `advanceTask / updateTask / getPlanSchedulingFacts` 统一读取该策略
 - 应用层若需要更多业务语义，应优先在自己的字段中扩展
+
+### 关键原则
+
+- LightTask 不再内置任何预设 Task 状态
+- 状态名和动作名都不是内核事实，而是应用层配置
+- “可编辑”和“是否已进入正式调度”是两件事，不能混成同一个概念
+- 如果数据里出现未注册状态，内核会直接报错，而不是把脏数据混入调度
 
 ## 5. 编辑权限边界
 
@@ -166,7 +143,7 @@ LightTask 负责区分“任务定义编辑”和“任务运行推进”。
 
 ### 应用层可编辑
 
-- 仅 `draft` 任务允许应用层直接修改定义字段
+- 仅 `editable = true` 的状态允许应用层直接修改定义字段
 - 可修改字段包括：
   - `title`
   - `summary`
@@ -178,7 +155,7 @@ LightTask 负责区分“任务定义编辑”和“任务运行推进”。
 
 ### 应用层不可编辑
 
-一旦任务脱离 `draft`：
+一旦任务进入 `editable = false` 的状态：
 
 - 应用层不再允许直接修改任务定义字段
 - 任务只能通过 LightTask 的状态推进与运行留痕接口继续变化
@@ -235,17 +212,17 @@ type Task = {
 建议统一返回：
 
 - `planId`
-- `draftTaskIds`
+- `editableTaskIds`
 - `runnableTaskIds`
 - `blockedTaskIds`
 - `activeTaskIds`
 - `terminalTaskIds`
-- `riskTaskIds`
+- `riskyTaskIds`
 - `byTaskId`
 
 每个任务都应带清晰解释：
 
-- `isDraft`
+- `isEditable`
 - `isRunnable`
 - `isBlocked`
 - `isActive`
@@ -263,16 +240,17 @@ type Task = {
 
 ### 关键规则
 
-- 可编辑状态会落入 `draftTaskIds`
+- 可编辑状态会落入 `editableTaskIds`
 - 可调度状态在依赖满足时进入 `runnableTaskIds`
 - `active = true` 的状态进入 `activeTaskIds`
 - `terminal = true` 的状态进入 `terminalTaskIds`
+- 若某状态 `schedulable = false` 且 `active = false` 且 `terminal = false`，它会被视为“当前不可进入正式调度”的状态
 - 依赖状态的 `completionOutcome` 会进一步区分 `dependency_not_done / dependency_failed / dependency_cancelled`
 - 调度事实要同时表达“是否可执行”和“为什么不可执行/为什么有风险”
 
 ### 返工风险规则
 
-如果某个上游任务从 `todo` 回到 `draft`：
+如果某个上游任务回到“不可调度、非活跃、非终态”的状态：
 
 - 尚未开始的后继任务重新阻塞
 - 已经开始的后继任务不自动回滚

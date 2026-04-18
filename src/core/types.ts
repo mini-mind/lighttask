@@ -143,7 +143,6 @@ export interface PersistedLightOutput extends LightTaskOutput {
 export interface CreateTaskInput {
   planId: string;
   title: string;
-  status?: TaskStatus;
   summary?: string;
   dependsOnTaskIds?: string[];
   steps?: TaskStepDefinitionInput[];
@@ -280,19 +279,19 @@ export interface ListOutputsInput {
 }
 
 export type PlanSchedulingBlockReasonCode =
-  | "self_draft"
-  | "dependency_in_draft"
+  | "self_not_schedulable"
+  | "dependency_not_schedulable"
   | "dependency_not_done"
   | "dependency_failed"
   | "dependency_cancelled"
   | "dependency_missing";
 
-export type PlanSchedulingRiskReasonCode = "upstream_returned_to_draft";
+export type PlanSchedulingRiskReasonCode = "upstream_became_not_schedulable";
 
 export interface PlanSchedulingTaskFacts {
   taskId: string;
   status: TaskStatus;
-  isDraft: boolean;
+  isEditable: boolean;
   isRunnable: boolean;
   isBlocked: boolean;
   isActive: boolean;
@@ -309,12 +308,12 @@ export interface PlanSchedulingTaskFacts {
 
 export interface GetPlanSchedulingFactsResult {
   planId: string;
-  draftTaskIds: string[];
+  editableTaskIds: string[];
   runnableTaskIds: string[];
   blockedTaskIds: string[];
   activeTaskIds: string[];
   terminalTaskIds: string[];
-  riskTaskIds: string[];
+  riskyTaskIds: string[];
   byTaskId: Record<string, PlanSchedulingTaskFacts>;
 }
 
@@ -356,7 +355,7 @@ export interface CreateLightTaskOptions {
   consistency?: LazyValidatedPort<ConsistencyPort>;
   clock: LazyValidatedPort<ClockPort>;
   idGenerator: LazyValidatedPort<IdGeneratorPort>;
-  taskLifecycle?: TaskLifecyclePolicy;
+  taskLifecycle: TaskLifecyclePolicy;
   runtimeLifecycle?: RuntimeLifecyclePolicy;
 }
 

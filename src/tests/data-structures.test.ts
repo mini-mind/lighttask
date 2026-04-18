@@ -1,15 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  TASK_STATUSES,
   bumpRevision,
   createDomainEvent,
   createPlanRecord,
   createTaskRecord,
-  isDefaultTaskStatus,
-  isTaskActiveStatus,
   isTaskStatus,
-  isTaskTerminalStatus,
 } from "../data-structures";
 
 test("数据结构层：Task/Plan 记录按终局模型初始化", () => {
@@ -19,6 +15,7 @@ test("数据结构层：Task/Plan 记录按终局模型初始化", () => {
     planId: "plan_1",
     title: "编排任务",
     createdAt: now,
+    status: "draft",
   });
   const plan = createPlanRecord({
     id: "plan_1",
@@ -61,14 +58,9 @@ test("数据结构层：Task 记录支持 trim、依赖和步骤透传", () => {
 });
 
 test("数据结构层：状态辅助函数与 revision 演进符合终局口径", () => {
-  assert.equal(TASK_STATUSES.includes("draft"), true);
   assert.equal(isTaskStatus("running"), true);
   assert.equal(isTaskStatus("custom_reviewing"), true);
   assert.equal(isTaskStatus("   "), false);
-  assert.equal(isDefaultTaskStatus("running"), true);
-  assert.equal(isDefaultTaskStatus("custom_reviewing"), false);
-  assert.equal(isTaskActiveStatus("running"), true);
-  assert.equal(isTaskTerminalStatus("completed"), true);
 
   const next = bumpRevision(
     {

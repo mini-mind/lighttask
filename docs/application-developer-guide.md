@@ -9,14 +9,14 @@
 1. `Plan` 只是任务分组容器
 2. `Task` 是唯一真源对象
 3. 依赖关系直接挂在 `Task` 上
-4. `draft` 是任务正式进入待办前的编辑状态
+4. `taskLifecycle` 必须由应用层显式注册
 
 如果换成产品语言去记：
 
 - `Plan` 是一个任务篮子
 - `Task` 是真实任务卡片
 - `dependsOnTaskIds` 是卡片之间的依赖
-- `draft` 表示卡片还没编辑完
+- 生命周期策略决定卡片何时可编辑、可调度、活跃或终结
 
 再补两句必须记住的话：
 
@@ -70,15 +70,39 @@ lighttask.createPlan({
 
 `Plan` 只是这个需求下任务的分组容器。
 
-### 第二步：先建任务
+### 第二步：先注册生命周期，再建任务
 
-默认内置策略下，应用层把“还在编辑中的任务”直接建成 `draft`：
+`createTask` 不再接受任意 `status`。  
+任务创建时会自动落到 `taskLifecycle.initialStatus`。
+
+例如，应用层可以先注册一套自己的生命周期：
+
+```ts
+const taskLifecycle = createTaskLifecyclePolicy({
+  initialStatus: "draft",
+  statusDefinitions: [
+    { key: "draft", editable: true, schedulable: false, active: false, terminal: false },
+    { key: "todo", editable: false, schedulable: true, active: false, terminal: false },
+    { key: "done", editable: false, schedulable: false, active: false, terminal: true, completionOutcome: "success" },
+  ],
+  actionDefinitions: [
+    { key: "finalize", stepProgress: "reset_all_to_todo" },
+    { key: "complete", requiresRunnable: true, stepProgress: "complete_all" },
+  ],
+  transitionDefinitions: [
+    { from: "draft", action: "finalize", to: "todo" },
+    { from: "todo", action: "complete", to: "done" },
+  ],
+  terminalStatuses: ["done"],
+});
+```
+
+然后再创建任务：
 
 ```ts
 lighttask.createTask({
   planId: "plan_alpha",
   title: "起草方案",
-  status: "draft",
   dependsOnTaskIds: [],
 });
 ```
@@ -88,13 +112,11 @@ lighttask.createTask({
 - 已真实存在于系统中
 - 但不能执行
 - 也会阻塞依赖它的下游任务
-- 创建入口本身也不应允许直接创建成 `todo` 或其他正式态
+- 创建入口本身不允许跳过 `initialStatus` 直接落到其他状态
 
-如果应用层注入了自定义 `taskLifecycle`，那么 `createTask` 会改为使用该策略的 `initialStatus`。
+### 第三步：只在 `editable = true` 的状态编辑任务定义
 
-### 第三步：只在 `draft` 态编辑任务定义
-
-应用层可以在 `draft` 态不断改这些字段：
+应用层可以在当前状态被注册为 `editable = true` 时，不断改这些字段：
 
 - 标题
 - 摘要
@@ -103,7 +125,7 @@ lighttask.createTask({
 - 元数据
 - 扩展字段
 
-一旦任务脱离 `draft`，这些字段就不再允许应用层直接改。
+一旦任务进入 `editable = false` 的状态，这些字段就不再允许应用层直接改。
 
 其中步骤也要拆开理解：
 
@@ -112,7 +134,7 @@ lighttask.createTask({
 - 所以应用层只能在 `draft` 态改步骤定义，正式态下步骤状态只能由 LightTask 推进
 - 写接口里的 `idempotencyKey` 是请求级幂等参数，不是任务定义字段本身
 
-### 第四步：编辑完成后，把任务从 `draft` 推到 `todo`
+### 第四步：编辑完成后，把任务推进到正式可调度状态
 
 任务准备好了，再进入正式待办：
 
@@ -140,12 +162,12 @@ const facts = lighttask.getPlanSchedulingFacts("plan_alpha");
 
 - 哪些任务现在可以并行做
 - 哪些任务还被上游阻塞
-- 哪些任务是因为上游还在 `draft` 被阻塞
+- 哪些任务是因为上游当前不可调度而被阻塞
 - 哪些任务虽然已经开始/完成，但因为上游返工而有风险
 
 尤其要直接消费：
 
-- `draftTaskIds / runnableTaskIds / blockedTaskIds / activeTaskIds / terminalTaskIds / riskTaskIds`
+- `editableTaskIds / runnableTaskIds / blockedTaskIds / activeTaskIds / terminalTaskIds / riskyTaskIds`
 - `byTaskId[taskId].dependencyTaskIds / downstreamTaskIds`
 - `byTaskId[taskId].blockReasonCodes / riskReasonCodes`
 - `byTaskId[taskId].unmetDependencyTaskIds / missingDependencyTaskIds / riskyDependencyTaskIds`
@@ -160,45 +182,17 @@ const facts = lighttask.getPlanSchedulingFacts("plan_alpha");
 
 正式执行态下，应用层不再改任务定义，只做状态推进和运行留痕推进。
 
-## 4. `draft` 和 `todo` 应该怎么理解
+## 4. `editable` 和“是否进入正式调度”要分开理解
 
-以下解释针对默认内置策略。若你已经注入自定义 `taskLifecycle`，应把这里的 `draft / todo / completed` 等词，替换成你自己策略里的对应状态定义。
+- `editable` 是状态属性，表示应用层能不能继续改任务定义
+- `schedulable` 是状态属性，表示这个状态在依赖满足后能不能进入可执行集合
+- 如果某状态同时 `schedulable = false`、`active = false`、`terminal = false`，它会被视为当前不可进入正式调度的状态
 
-### `draft`
+这意味着：
 
-表示：
-
-- 这条任务还在编辑
-- 不可执行
-- 会阻塞后继
-- 应用层可以改定义字段
-
-### `todo`
-
-表示：
-
-- 这条任务已经编辑完成
-- 正式进入待办
-- 可以参与正式调度
-- 定义字段不再允许应用层直接改
-
-### `todo -> draft`
-
-这是明确允许的返工路径。
-
-应用层如果发现任务设计还得重做，可以把任务从 `todo` 打回 `draft`。
-
-LightTask 会负责：
-
-- 让这个任务重新不可执行
-- 阻塞还没开始的下游任务
-- 给已经开始或已经完成的下游任务打上“上游返工风险”标记
-
-这里“已经开始”具体指：
-
-- `dispatched`
-- `running`
-- `blocked_by_approval`
+- “草稿态”可以由应用层自己命名
+- “可编辑”不等于“草稿态”
+- 一个任务返回到不可调度状态后，下游会被重新阻塞或打上风险标记
 
 LightTask 不会负责：
 
@@ -208,13 +202,13 @@ LightTask 不会负责：
 
 这些都交给应用层处理。
 
-## 5. 什么时候要自定义 `taskLifecycle`
+## 5. `taskLifecycle` 应该怎样设计
 
-大多数接入方直接用默认 8 态就够了。你只在下面这些场景考虑自定义：
+你至少要明确注册 3 类东西：
 
-- 你的产品里没有 `draft -> todo -> dispatched -> running -> completed` 这条默认链
-- 你希望任务创建后直接进入 `todo`，而不是先落在 `draft`
-- 你需要更少的状态，或者需要替换动作名和转移规则
+- `statusDefinitions`
+- `actionDefinitions`
+- `transitionDefinitions`
 
 接入方式：
 
@@ -242,6 +236,7 @@ const taskLifecycle = createTaskLifecyclePolicy({
       completionOutcome: "success",
     },
   ],
+  actionDefinitions: [{ key: "complete", requiresRunnable: true, stepProgress: "complete_all" }],
   transitionDefinitions: [
     { from: "todo", action: "complete", to: "completed" },
   ],
@@ -257,8 +252,8 @@ const lighttask = createLightTask(
 
 这里要记住两条边界：
 
-- 自定义 `taskLifecycle` 已经可以驱动 `createTask / advanceTask / updateTask / getPlanSchedulingFacts`
-- `TaskStatus` 现在已经放开成 `string`，但状态是否合法仍必须由你传入的 `taskLifecycle` 先注册
+- `taskLifecycle` 已经可以驱动 `createTask / advanceTask / updateTask / getPlanSchedulingFacts`
+- `TaskStatus` 与 `TaskAction` 都已经放开成 `string`，但是否合法仍必须由你传入的 `taskLifecycle` 先注册
 
 ## 6. 不推荐的接法
 
@@ -303,10 +298,10 @@ const lighttask = createLightTask(
 尤其要能区分：
 
 - 被普通未完成依赖阻塞
-- 被上游 `draft` 阻塞
+- 被上游当前不可调度阻塞
 - 被失败的上游阻塞
 - 被取消的上游阻塞
-- 自己仍是 `draft`
+- 自己当前还不可调度
 
 这里建议直接按“原因代码数组”消费，而不是假设永远只有一个原因。
 

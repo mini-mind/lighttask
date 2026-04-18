@@ -1,34 +1,26 @@
-import {
-  type CoreError,
-  DEFAULT_TASK_ACTIVE_STATUSES,
-  DEFAULT_TASK_TERMINAL_STATUSES,
-  TASK_STATUSES,
-  type TaskStatus,
-  createCoreError,
-} from "../data-structures";
+import { type CoreError, type TaskStatus, createCoreError } from "../data-structures";
 
-export type TaskAction =
-  | "finalize"
-  | "return_to_draft"
-  | "dispatch"
-  | "start"
-  | "request_approval"
-  | "approve"
-  | "complete"
-  | "fail"
-  | "cancel";
+export type TaskAction = string;
 
 export type TaskTransitionResult =
   | {
       ok: true;
       status: TaskStatus;
+      hooks?: TaskLifecycleHooks;
     }
   | {
       ok: false;
       error: CoreError;
     };
 
-export type TaskStepProgressPolicy = "none" | "advance_one" | "complete_all";
+export type TaskStepProgressPolicy = "none" | "advance_one" | "complete_all" | "reset_all_to_todo";
+
+export interface TaskActionDefinition {
+  key: TaskAction;
+  label?: string;
+  requiresRunnable?: boolean;
+  stepProgress?: TaskStepProgressPolicy;
+}
 
 export interface TaskStatusDefinition {
   key: TaskStatus;
@@ -65,6 +57,9 @@ export interface TaskStatusTransitionDefinition {
 
 export interface TaskLifecyclePolicy {
   initialStatus: TaskStatus;
+  hasAction(action: TaskAction): boolean;
+  getActionDefinition(action: TaskAction): TaskActionDefinition | undefined;
+  listActionDefinitions(): TaskActionDefinition[];
   hasStatus(status: TaskStatus): boolean;
   getStatusDefinition(status: TaskStatus): TaskStatusDefinition | undefined;
   listStatuses(): TaskStatusDefinition[];
@@ -75,108 +70,20 @@ export interface TaskLifecyclePolicy {
   transition(currentStatus: TaskStatus, action: TaskAction): TaskTransitionResult;
   listActions(currentStatus: TaskStatus): TaskAction[];
   resolveStepProgress(action: TaskAction): TaskStepProgressPolicy;
+  requiresRunnable(action: TaskAction): boolean;
 }
 
 export interface CreateTaskLifecyclePolicyInput {
   initialStatus: TaskStatus;
-  statusDefinitions?: readonly TaskStatusDefinition[];
-  transitionDefinitions?: readonly TaskStatusTransitionDefinition[];
-  transitionTable?: Readonly<Record<TaskStatus, Readonly<Partial<Record<TaskAction, TaskStatus>>>>>;
+  statusDefinitions: readonly TaskStatusDefinition[];
+  actionDefinitions: readonly TaskActionDefinition[];
+  transitionDefinitions: readonly TaskStatusTransitionDefinition[];
   terminalStatuses?: readonly TaskStatus[];
-  stepProgressByAction?: Readonly<Partial<Record<TaskAction, TaskStepProgressPolicy>>>;
   validateTransition?: (input: {
     currentStatus: TaskStatus;
     action: TaskAction;
     nextStatus: TaskStatus;
   }) => CoreError | undefined;
-}
-
-function resolveDefaultTaskCompletionOutcome(
-  status: TaskStatus,
-): TaskStatusDefinition["completionOutcome"] {
-  if (status === "completed") {
-    return "success";
-  }
-  if (status === "failed") {
-    return "failed";
-  }
-  if (status === "cancelled") {
-    return "cancelled";
-  }
-  return undefined;
-}
-
-const DEFAULT_TASK_STATUS_DEFINITIONS: readonly TaskStatusDefinition[] = TASK_STATUSES.map(
-  (key) => ({
-    key,
-    label: key,
-    editable: key === "draft",
-    schedulable: key === "todo",
-    active: (DEFAULT_TASK_ACTIVE_STATUSES as readonly TaskStatus[]).includes(key),
-    terminal: (DEFAULT_TASK_TERMINAL_STATUSES as readonly TaskStatus[]).includes(key),
-    completionOutcome: resolveDefaultTaskCompletionOutcome(key),
-  }),
-);
-
-const TASK_TRANSITION_TABLE: Readonly<
-  Record<TaskStatus, Readonly<Partial<Record<TaskAction, TaskStatus>>>>
-> = {
-  draft: {
-    finalize: "todo",
-  },
-  todo: {
-    return_to_draft: "draft",
-    dispatch: "dispatched",
-    fail: "failed",
-    cancel: "cancelled",
-  },
-  dispatched: {
-    start: "running",
-    fail: "failed",
-    cancel: "cancelled",
-  },
-  running: {
-    request_approval: "blocked_by_approval",
-    complete: "completed",
-    fail: "failed",
-    cancel: "cancelled",
-  },
-  blocked_by_approval: {
-    approve: "running",
-    fail: "failed",
-    cancel: "cancelled",
-  },
-  completed: {},
-  failed: {},
-  cancelled: {},
-} as const;
-
-const DEFAULT_TASK_STEP_PROGRESS_BY_ACTION = {
-  finalize: "none",
-  return_to_draft: "none",
-  dispatch: "advance_one",
-  start: "advance_one",
-  complete: "complete_all",
-} satisfies Readonly<Partial<Record<TaskAction, TaskStepProgressPolicy>>>;
-
-const DEFAULT_TASK_TRANSITION_DEFINITIONS =
-  createTransitionDefinitionsFromTable(TASK_TRANSITION_TABLE);
-
-function createTransitionDefinitionsFromTable(
-  transitionTable: Readonly<Record<TaskStatus, Readonly<Partial<Record<TaskAction, TaskStatus>>>>>,
-): TaskStatusTransitionDefinition[] {
-  const definitions: TaskStatusTransitionDefinition[] = [];
-  for (const [from, transitions] of Object.entries(transitionTable)) {
-    for (const [action, to] of Object.entries(transitions)) {
-      definitions.push({
-        from,
-        action: action as TaskAction,
-        to: to as TaskStatus,
-      });
-    }
-  }
-
-  return definitions;
 }
 
 function createTransitionTableFromDefinitions(
@@ -205,69 +112,58 @@ function cloneTaskTransitionDefinition(
   };
 }
 
-function normalizeTaskStatusDefinitions(
-  input: CreateTaskLifecyclePolicyInput,
-): TaskStatusDefinition[] {
-  if (input.statusDefinitions && input.statusDefinitions.length > 0) {
-    const statusDefinitions = input.statusDefinitions.map(cloneTaskStatusDefinition);
-    const terminalStatuses = new Set(input.terminalStatuses ?? []);
-
-    for (const definition of statusDefinitions) {
-      if (terminalStatuses.has(definition.key)) {
-        definition.terminal = true;
-      }
-    }
-
-    return statusDefinitions;
-  }
-
-  const terminalStatuses = new Set(input.terminalStatuses ?? []);
-  const transitionTable = input.transitionTable ?? TASK_TRANSITION_TABLE;
-  const candidateStatuses = new Set<TaskStatus>([input.initialStatus, ...terminalStatuses]);
-
-  for (const [from, transitions] of Object.entries(transitionTable)) {
-    candidateStatuses.add(from);
-    for (const to of Object.values(transitions)) {
-      if (to !== undefined) {
-        candidateStatuses.add(to);
-      }
-    }
-  }
-
-  return [...candidateStatuses].map((status) => ({
-    key: status,
-    label: status,
-    editable: status === "draft",
-    schedulable: status === "todo",
-    active: (DEFAULT_TASK_ACTIVE_STATUSES as readonly TaskStatus[]).includes(status),
-    terminal: terminalStatuses.has(status),
-    completionOutcome: resolveDefaultTaskCompletionOutcome(status),
-  }));
-}
-
-function normalizeTaskTransitionDefinitions(
-  input: CreateTaskLifecyclePolicyInput,
-): TaskStatusTransitionDefinition[] {
-  if (input.transitionDefinitions && input.transitionDefinitions.length > 0) {
-    return input.transitionDefinitions.map(cloneTaskTransitionDefinition);
-  }
-
-  return createTransitionDefinitionsFromTable(input.transitionTable ?? TASK_TRANSITION_TABLE);
+function cloneTaskActionDefinition(definition: TaskActionDefinition): TaskActionDefinition {
+  return { ...definition };
 }
 
 export function createTaskLifecyclePolicy(
   input: CreateTaskLifecyclePolicyInput,
 ): TaskLifecyclePolicy {
-  const statusDefinitions = normalizeTaskStatusDefinitions(input);
+  const statusDefinitions = input.statusDefinitions.map(cloneTaskStatusDefinition);
   if (statusDefinitions.length === 0) {
     throw new Error("Task lifecycle policy 至少需要一个状态定义");
+  }
+  const actionDefinitions = input.actionDefinitions.map(cloneTaskActionDefinition);
+  const statusDefinitionKeys = new Set<string>();
+  const actionDefinitionKeys = new Set<string>();
+  for (const definition of statusDefinitions) {
+    if (!definition.key.trim()) {
+      throw new Error("Task lifecycle policy 不允许空白状态 key");
+    }
+    if (statusDefinitionKeys.has(definition.key)) {
+      throw new Error(`Task lifecycle policy 存在重复状态定义: ${definition.key}`);
+    }
+    statusDefinitionKeys.add(definition.key);
+  }
+  for (const definition of actionDefinitions) {
+    if (!definition.key.trim()) {
+      throw new Error("Task lifecycle policy 不允许空白动作 key");
+    }
+    if (actionDefinitionKeys.has(definition.key)) {
+      throw new Error(`Task lifecycle policy 存在重复动作定义: ${definition.key}`);
+    }
+    actionDefinitionKeys.add(definition.key);
   }
   const statusDefinitionMap = new Map(
     statusDefinitions.map((definition) => [definition.key, cloneTaskStatusDefinition(definition)]),
   );
-  const transitionDefinitions = normalizeTaskTransitionDefinitions(input);
+  const actionDefinitionMap = new Map(
+    actionDefinitions.map((definition) => [definition.key, cloneTaskActionDefinition(definition)]),
+  );
+  const transitionDefinitions = input.transitionDefinitions.map(cloneTaskTransitionDefinition);
   if (!statusDefinitionMap.has(input.initialStatus)) {
     throw new Error(`Task lifecycle policy 未注册 initialStatus: ${input.initialStatus}`);
+  }
+  const terminalStatuses = new Set(input.terminalStatuses ?? []);
+  for (const terminalStatus of terminalStatuses) {
+    if (!statusDefinitionMap.has(terminalStatus)) {
+      throw new Error(`Task lifecycle policy 未注册 terminalStatus: ${terminalStatus}`);
+    }
+  }
+  for (const definition of statusDefinitions) {
+    if (terminalStatuses.has(definition.key)) {
+      definition.terminal = true;
+    }
   }
   for (const definition of transitionDefinitions) {
     if (!statusDefinitionMap.has(definition.from)) {
@@ -276,6 +172,9 @@ export function createTaskLifecyclePolicy(
     if (!statusDefinitionMap.has(definition.to)) {
       throw new Error(`Task lifecycle policy 未注册转移终点状态: ${definition.to}`);
     }
+    if (!actionDefinitionMap.has(definition.action)) {
+      throw new Error(`Task lifecycle policy 未注册转移动作: ${definition.action}`);
+    }
   }
   const transitionTable = createTransitionTableFromDefinitions(transitionDefinitions);
   const transitionDefinitionMap = new Map(
@@ -283,12 +182,6 @@ export function createTaskLifecyclePolicy(
       `${definition.from}\u0000${definition.action}`,
       cloneTaskTransitionDefinition(definition),
     ]),
-  );
-  const terminalStatuses = new Set(
-    input.terminalStatuses ??
-      statusDefinitions
-        .filter((definition) => definition.terminal)
-        .map((definition) => definition.key),
   );
 
   function getTransitionDefinition(
@@ -349,6 +242,9 @@ export function createTaskLifecyclePolicy(
     return {
       ok: true,
       status: nextStatus,
+      hooks: getTransitionDefinition(currentStatus, action)?.hooks
+        ? { ...getTransitionDefinition(currentStatus, action)?.hooks }
+        : undefined,
     };
   }
 
@@ -362,6 +258,16 @@ export function createTaskLifecyclePolicy(
 
   return {
     initialStatus: input.initialStatus,
+    hasAction(action) {
+      return actionDefinitionMap.has(action);
+    },
+    getActionDefinition(action) {
+      const definition = actionDefinitionMap.get(action);
+      return definition ? cloneTaskActionDefinition(definition) : undefined;
+    },
+    listActionDefinitions() {
+      return actionDefinitions.map(cloneTaskActionDefinition);
+    },
     hasStatus(status) {
       return statusDefinitionMap.has(status);
     },
@@ -386,61 +292,10 @@ export function createTaskLifecyclePolicy(
     transition,
     listActions,
     resolveStepProgress(action) {
-      return input.stepProgressByAction?.[action] ?? "none";
+      return actionDefinitionMap.get(action)?.stepProgress ?? "none";
+    },
+    requiresRunnable(action) {
+      return actionDefinitionMap.get(action)?.requiresRunnable ?? false;
     },
   };
-}
-
-export const defaultTaskLifecyclePolicy = createTaskLifecyclePolicy({
-  initialStatus: "draft",
-  statusDefinitions: DEFAULT_TASK_STATUS_DEFINITIONS,
-  transitionDefinitions: DEFAULT_TASK_TRANSITION_DEFINITIONS,
-  terminalStatuses: DEFAULT_TASK_TERMINAL_STATUSES,
-  stepProgressByAction: DEFAULT_TASK_STEP_PROGRESS_BY_ACTION,
-});
-
-export function canTaskTransition(currentStatus: TaskStatus, action: TaskAction): boolean {
-  return defaultTaskLifecyclePolicy.canTransition(currentStatus, action);
-}
-
-export function getNextTaskStatus(
-  currentStatus: TaskStatus,
-  action: TaskAction,
-): TaskStatus | undefined {
-  return defaultTaskLifecyclePolicy.getNextStatus(currentStatus, action);
-}
-
-export function transitionTaskStatus(
-  currentStatus: TaskStatus,
-  action: TaskAction,
-): TaskTransitionResult {
-  return defaultTaskLifecyclePolicy.transition(currentStatus, action);
-}
-
-export function listTaskActions(currentStatus: TaskStatus): TaskAction[] {
-  return defaultTaskLifecyclePolicy.listActions(currentStatus);
-}
-
-export function listTaskStatuses(): TaskStatusDefinition[] {
-  return defaultTaskLifecyclePolicy.listStatuses();
-}
-
-export function listTaskTransitions(currentStatus?: TaskStatus): TaskStatusTransitionDefinition[] {
-  return defaultTaskLifecyclePolicy.listTransitions(currentStatus);
-}
-
-export function getTaskStatusDefinition(status: TaskStatus): TaskStatusDefinition | undefined {
-  return defaultTaskLifecyclePolicy.getStatusDefinition(status);
-}
-
-export function isTaskEditableStatus(status: TaskStatus): boolean {
-  return defaultTaskLifecyclePolicy.getStatusDefinition(status)?.editable ?? false;
-}
-
-export function isTaskSchedulableStatus(status: TaskStatus): boolean {
-  return defaultTaskLifecyclePolicy.getStatusDefinition(status)?.schedulable ?? false;
-}
-
-export function resolveTaskStepProgress(action: TaskAction): TaskStepProgressPolicy {
-  return defaultTaskLifecyclePolicy.resolveStepProgress(action);
 }

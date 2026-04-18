@@ -7,7 +7,7 @@ LightTask 是面向上层业务应用的 TypeScript 编排内核。
 - `Plan` 只是任务分组容器
 - `Task` 是唯一真源对象
 - 任务依赖直接写在 `Task` 上
-- `draft` 是正式待办之前的草稿状态
+- `Task.status` 只是一条由应用层注册的状态轴
 - 调度直接围绕 `Task` 集合计算
 - `Runtime` / `Output` 只负责执行与结果留痕
 
@@ -15,8 +15,7 @@ LightTask 是面向上层业务应用的 TypeScript 编排内核。
 
 - `Plan` 像一个任务篮子，只负责把同一轮协作里的任务放在一起。
 - `Task` 像真实任务卡片，标题、摘要、依赖、状态、步骤，都在它身上。
-- `draft` 表示这张任务卡还在编辑，不能执行。
-- `todo` 表示这张任务卡已经设计完成，可以进入正式调度。
+- 任务能不能编辑、能不能调度、是不是终态，都由应用层注册的生命周期策略解释。
 - `Runtime` 像执行过程记录。
 - `Output` 像这次执行留下来的结果物。
 
@@ -73,48 +72,33 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 
 ## 状态模型
 
-LightTask 使用单轴任务状态，并内置一套默认任务生命周期策略：
+LightTask 只提供一条任务状态轴：
 
-- `draft`
-- `todo`
-- `dispatched`
-- `running`
-- `blocked_by_approval`
-- `completed`
-- `failed`
-- `cancelled`
+- `TaskStatus = string`
+- 合法状态必须由应用层在 `taskLifecycle` 中注册
+- `createTask` 永远只会创建到该策略的 `initialStatus`
 
-其中：
-
-- `draft`：任务仍在编辑，不能执行
-- `todo`：任务设计完成，进入正式待办
-- `todo -> draft`：允许，表示返工
-- 默认策略下，`createTask` 初始只能创建 `draft`
-- 一旦任务不再处于 `draft`，应用层不能再直接修改任务定义字段
-
-补充说明：
-
-- 默认状态集只是内置策略，不是运行时唯一允许的状态名集合
-- `TaskStatus` 是 `string`，状态合法性由 `taskLifecycle` 注册表约束
-- 应用层若需要额外业务语义，优先放在自己的字段中扩展，而不是要求 LightTask 新增副轴字段
+LightTask 不再内置任何预设 Task 状态。  
+像 `draft / todo / running / completed` 这类名字，只能存在于某个应用自己的生命周期配置里，不能再被当成内核事实。
 
 ## 生命周期策略
 
-LightTask 支持两种接入方式：
+`taskLifecycle` 是必填配置。  
+你在创建 `LightTask` 实例前，必须先注册：
 
-- 直接使用内置默认 8 态策略
-- 通过 `createLightTask({ taskLifecycle })` 注入自定义任务生命周期策略
+- 状态定义
+- 动作定义
+- 合法转移
+
+也就是说，LightTask 不会偷偷回退到一套默认状态机。
 
 这套策略对象会驱动：
 
 - `createTask` 初始状态
 - `advanceTask` 状态迁移与步骤推进策略
+- `advanceTask` 的 runnable 准入动作
 - `updateTask` 的可编辑状态边界
-- `getPlanSchedulingFacts` 对 `draft / runnable / blocked / active / terminal / risk` 的分类
-
-对应用层最重要的一点是：
-
-- “默认 8 态”只是默认策略，不是 LightTask 主链里写死不变的一套判断
+- `getPlanSchedulingFacts` 的分类与原因码解释
 
 ## 调度语义
 
@@ -126,16 +110,13 @@ LightTask 支持两种接入方式：
 
 调度规则的人话版本：
 
-- `draft` 自己不可执行
-- 依赖某个 `draft` 任务的下游任务会被阻塞
-- 如果某个上游任务从 `todo` 回到 `draft`：
-  - 尚未开始的下游任务重新阻塞
-  - 已经开始或已完成的下游任务不会被强制回滚
-  - 但会被标记为“上游返工风险”
+- 某个任务当前是否可编辑，由状态定义的 `editable` 决定
+- 某个任务当前是否可进入可执行集合，由状态定义的 `schedulable` 与依赖满足情况共同决定
+- 某个上游任务如果回到“不可调度、非活跃、非终态”的状态，下游会被重新阻塞或被打上风险标记
 
 注意：
 
-- `getPlanSchedulingFacts` 会返回 `draft / runnable / blocked / active / terminal / risk` 等调度事实，并在 `byTaskId` 中解释每个任务当前所处的可执行性与风险
+- `getPlanSchedulingFacts` 会返回 `editable / runnable / blocked / active / terminal / risky` 等中性调度事实，并在 `byTaskId` 中解释每个任务当前所处的可执行性与风险
 - “阻塞”与“风险”都是调度事实，不是新的任务状态
 - `getPlanSchedulingFacts` 读到的是即时视图，不是额外持久化的一张表
 
@@ -145,9 +126,9 @@ LightTask 支持两种接入方式：
 
 默认规则：
 
-- 应用层只能编辑 `draft` 任务的定义字段
-- 非 `draft` 状态下，应用层不能直接改任务定义字段
-- 非 `draft` 状态下，LightTask 只允许通过状态推进、步骤推进、运行留痕去更新任务
+- 只有当前状态被注册为 `editable = true` 时，应用层才能直接改任务定义字段
+- 一旦任务处于 `editable = false` 的状态，应用层不能再直接改任务定义字段
+- 非编辑态下，LightTask 只允许通过状态推进、步骤推进、运行留痕去更新任务
 
 进一步说清楚：
 
@@ -182,20 +163,18 @@ LightTask 对删除任务采取稳妥兜底：
 ```ts
 import { createLightTask } from "lighttask";
 import { createInMemoryLightTaskPorts } from "lighttask/ports/in-memory";
-
-const lighttask = createLightTask(createInMemoryLightTaskPorts());
-```
-
-如果你需要替换默认任务生命周期策略，也可以直接把策略一并传进去：
-
-```ts
-import { createLightTask } from "lighttask";
-import { createInMemoryLightTaskPorts } from "lighttask/ports/in-memory";
 import { createTaskLifecyclePolicy } from "lighttask/rules";
 
 const taskLifecycle = createTaskLifecyclePolicy({
-  initialStatus: "todo",
+  initialStatus: "draft",
   statusDefinitions: [
+    {
+      key: "draft",
+      editable: true,
+      schedulable: false,
+      active: false,
+      terminal: false,
+    },
     {
       key: "todo",
       editable: false,
@@ -212,7 +191,12 @@ const taskLifecycle = createTaskLifecyclePolicy({
       completionOutcome: "success",
     },
   ],
+  actionDefinitions: [
+    { key: "finalize", stepProgress: "reset_all_to_todo" },
+    { key: "complete", requiresRunnable: true, stepProgress: "complete_all" },
+  ],
   transitionDefinitions: [
+    { from: "draft", action: "finalize", to: "todo" },
     { from: "todo", action: "complete", to: "completed" },
   ],
   terminalStatuses: ["completed"],

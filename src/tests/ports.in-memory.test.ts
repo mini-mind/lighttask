@@ -7,7 +7,7 @@ import {
   createInMemoryPlanRepository,
   createInMemoryTaskRepository,
 } from "../ports/in-memory";
-import { defaultTaskLifecyclePolicy } from "../rules";
+import { createExampleTaskLifecycle } from "./ports-fixture";
 
 test("in-memory 任务仓储支持创建、条件保存和条件删除", () => {
   const repository = createInMemoryTaskRepository<{
@@ -58,15 +58,16 @@ test("in-memory notify collector 保持事件快照隔离", () => {
 });
 
 test("createInMemoryLightTaskPorts 返回完整最小端口集合", () => {
+  const taskLifecycle = createExampleTaskLifecycle();
   const ports = createInMemoryLightTaskPorts({
     notify: createInMemoryNotifyCollector(),
     planRepository: createInMemoryPlanRepository(),
-    taskLifecycle: defaultTaskLifecyclePolicy,
+    taskLifecycle,
   });
   assert.equal(typeof ports.taskRepository.list, "function");
   assert.equal(typeof ports.planRepository.create, "function");
   assert.equal(typeof ports.consistency.run, "function");
-  assert.equal(ports.taskLifecycle, defaultTaskLifecyclePolicy);
+  assert.equal(ports.taskLifecycle, taskLifecycle);
 });
 
 test("仓储错误工厂返回结构化 core error", () => {

@@ -4,7 +4,6 @@ import type { LightTaskStep } from "./types";
 
 export function applyTaskStepProgress(
   steps: LightTaskStep[],
-  action: TaskAction,
   policy: TaskStepProgressPolicy,
 ): LightTaskStep[] {
   if (policy === "complete_all") {
@@ -15,7 +14,7 @@ export function applyTaskStepProgress(
     return advanceTaskStepsOne(steps);
   }
 
-  if (policy === "none" && (action === "finalize" || action === "return_to_draft")) {
+  if (policy === "reset_all_to_todo") {
     return resetTaskStepsToTodo(steps);
   }
 

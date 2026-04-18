@@ -19,7 +19,7 @@ import type {
 function buildCreateTaskFingerprint(input: {
   planId: string;
   title: string;
-  status?: TaskStatus;
+  status: TaskStatus;
   summary?: string;
   dependsOnTaskIds: string[];
   steps: unknown[];
@@ -48,7 +48,7 @@ export function createTaskUseCase(
   );
   const planId = input.planId.trim();
   const title = input.title.trim();
-  const status = input.status ?? taskLifecycle.initialStatus;
+  const status = taskLifecycle.initialStatus;
   const dependsOnTaskIds = normalizeDependsOnTaskIds(input.dependsOnTaskIds);
 
   if (!planId) {
@@ -59,14 +59,6 @@ export function createTaskUseCase(
   if (!title) {
     throwLightTaskError(
       createLightTaskError("VALIDATION_ERROR", "任务标题不能为空", { title: input.title }),
-    );
-  }
-  if (status !== taskLifecycle.initialStatus) {
-    throwLightTaskError(
-      createLightTaskError("STATE_CONFLICT", "createTask 初始状态只允许生命周期策略的初始状态", {
-        status,
-        initialStatus: taskLifecycle.initialStatus,
-      }),
     );
   }
   if (!getPlan(planId)) {

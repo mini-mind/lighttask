@@ -24,14 +24,124 @@ function ensurePlan(lighttask: ReturnType<typeof createLightTask>, planId: strin
   }
 }
 
+function createCliTaskLifecycle() {
+  const statuses = new Map([
+    ["draft", { key: "draft", editable: true, schedulable: false, active: false, terminal: false }],
+    ["todo", { key: "todo", editable: false, schedulable: true, active: false, terminal: false }],
+    [
+      "dispatched",
+      { key: "dispatched", editable: false, schedulable: false, active: true, terminal: false },
+    ],
+    [
+      "running",
+      { key: "running", editable: false, schedulable: false, active: true, terminal: false },
+    ],
+    [
+      "completed",
+      {
+        key: "completed",
+        editable: false,
+        schedulable: false,
+        active: false,
+        terminal: true,
+        completionOutcome: "success" as const,
+      },
+    ],
+  ]);
+  const actions = new Map([
+    ["finalize", { key: "finalize", stepProgress: "reset_all_to_todo" as const }],
+    ["dispatch", { key: "dispatch", requiresRunnable: true, stepProgress: "advance_one" as const }],
+    ["start", { key: "start", stepProgress: "advance_one" as const }],
+    ["complete", { key: "complete", stepProgress: "complete_all" as const }],
+  ]);
+  const transitions = [
+    { from: "draft", action: "finalize", to: "todo" },
+    { from: "todo", action: "dispatch", to: "dispatched" },
+    { from: "dispatched", action: "start", to: "running" },
+    { from: "running", action: "complete", to: "completed" },
+  ] as const;
+  const transitionsByKey = new Map(
+    transitions.map((transition) => [`${transition.from}\u0000${transition.action}`, transition]),
+  );
+
+  return {
+    initialStatus: "draft",
+    hasAction(action: string) {
+      return actions.has(action);
+    },
+    getActionDefinition(action: string) {
+      const definition = actions.get(action);
+      return definition ? { ...definition } : undefined;
+    },
+    listActionDefinitions() {
+      return [...actions.values()].map((definition) => ({ ...definition }));
+    },
+    hasStatus(status: string) {
+      return statuses.has(status);
+    },
+    getStatusDefinition(status: string) {
+      const definition = statuses.get(status);
+      return definition ? { ...definition } : undefined;
+    },
+    listStatuses() {
+      return [...statuses.values()].map((definition) => ({ ...definition }));
+    },
+    listTransitions(currentStatus?: string) {
+      return transitions
+        .filter((transition) => currentStatus === undefined || transition.from === currentStatus)
+        .map((transition) => ({ ...transition }));
+    },
+    isTerminal(status: string) {
+      return statuses.get(status)?.terminal ?? false;
+    },
+    canTransition(currentStatus: string, action: string) {
+      return transitionsByKey.has(`${currentStatus}\u0000${action}`);
+    },
+    getNextStatus(currentStatus: string, action: string) {
+      return transitionsByKey.get(`${currentStatus}\u0000${action}`)?.to;
+    },
+    transition(currentStatus: string, action: string) {
+      const transition = transitionsByKey.get(`${currentStatus}\u0000${action}`);
+      if (!transition) {
+        return {
+          ok: false as const,
+          error: {
+            code: "STATE_CONFLICT" as const,
+            message: "任务状态迁移冲突",
+            details: { currentStatus, action },
+          },
+        };
+      }
+      return {
+        ok: true as const,
+        status: transition.to,
+        hooks: undefined,
+      };
+    },
+    listActions(currentStatus: string) {
+      return transitions
+        .filter((transition) => transition.from === currentStatus)
+        .map((transition) => transition.action);
+    },
+    resolveStepProgress(action: string) {
+      return actions.get(action)?.stepProgress ?? "none";
+    },
+    requiresRunnable(action: string) {
+      return actions.get(action)?.requiresRunnable ?? false;
+    },
+  };
+}
+
 function run(): void {
   const [, , command, ...rest] = process.argv;
+  const taskLifecycle = createCliTaskLifecycle();
   const lighttask = createLightTask({
     taskRepository: createInMemoryTaskRepository(),
     planRepository: createInMemoryPlanRepository(),
     consistency: createNoopConsistencyPort(),
     clock: createSystemClock(),
     idGenerator: createTaskIdGenerator(),
+    taskLifecycle,
   });
 
   if (!command || command === "help") {

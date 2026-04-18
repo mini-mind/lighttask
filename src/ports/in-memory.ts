@@ -379,7 +379,7 @@ export interface InMemoryLightTaskPortsOptions<TTaskLifecycle = never> {
   planRepository?: PlanRepository<PlanRecord>;
   runtimeRepository?: RuntimeRepository<RuntimeRecord>;
   outputRepository?: OutputRepository<OutputRecord>;
-  taskLifecycle?: TTaskLifecycle;
+  taskLifecycle: TTaskLifecycle;
   notify?: NotifyPort<DomainEvent>;
   consistency?: ConsistencyPort;
   clock?: ClockPort;
@@ -391,7 +391,7 @@ export interface InMemoryLightTaskPorts<TTaskLifecycle = never> {
   planRepository: PlanRepository<PlanRecord>;
   runtimeRepository: RuntimeRepository<RuntimeRecord>;
   outputRepository: OutputRepository<OutputRecord>;
-  taskLifecycle?: TTaskLifecycle;
+  taskLifecycle: TTaskLifecycle;
   notify: NotifyPort<DomainEvent>;
   consistency: ConsistencyPort;
   clock: ClockPort;
@@ -399,7 +399,7 @@ export interface InMemoryLightTaskPorts<TTaskLifecycle = never> {
 }
 
 export function createInMemoryLightTaskPorts<TTaskLifecycle = never>(
-  overrides: InMemoryLightTaskPortsOptions<TTaskLifecycle> = {},
+  overrides: InMemoryLightTaskPortsOptions<TTaskLifecycle>,
 ): InMemoryLightTaskPorts<TTaskLifecycle> {
   return {
     taskRepository: overrides.taskRepository ?? createInMemoryTaskRepository<InMemoryTaskRecord>(),

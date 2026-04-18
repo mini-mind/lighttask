@@ -8,7 +8,7 @@ import {
 } from "./lighttask-error";
 import { publishTaskAdvancedEvent, resolveNotifyPublisher } from "./notify-event";
 import { buildPlanSchedulingFacts } from "./task-dependency-snapshot";
-import { resolveTaskLifecyclePolicy } from "./task-lifecycle";
+import { requireTaskStatusDefinition, resolveTaskLifecyclePolicy } from "./task-lifecycle";
 import { applyTaskStepProgress } from "./task-progress";
 import { clonePersistedTask, toPublicTask } from "./task-snapshot";
 import type {
@@ -32,17 +32,15 @@ function assertTaskActionAllowed(
   input: AdvanceTaskInput,
   allTasks: PersistedLightTask[],
 ): void {
-  if (input.action === "dispatch") {
-    const facts = buildPlanSchedulingFacts(
-      task.planId,
-      allTasks,
-      resolveTaskLifecyclePolicy(options),
-    );
+  const taskLifecycle = resolveTaskLifecyclePolicy(options);
+  if (taskLifecycle.requiresRunnable(input.action)) {
+    const facts = buildPlanSchedulingFacts(task.planId, allTasks, taskLifecycle);
     if (!facts.byTaskId[task.id]?.isRunnable) {
       throwLightTaskError(
-        createLightTaskError("STATE_CONFLICT", "dispatch 只允许推进当前 runnable 任务", {
+        createLightTaskError("STATE_CONFLICT", "当前动作只允许推进 runnable 任务", {
           taskId: task.id,
           currentStatus: task.status,
+          action: input.action,
           blockReasonCodes: facts.byTaskId[task.id]?.blockReasonCodes ?? [],
         }),
       );
@@ -93,21 +91,25 @@ export function advanceTaskUseCase(
 
   assertExpectedRevision(storedTask.revision, input.expectedRevision);
   assertTaskActionAllowed(options, storedTask, input, listTasks());
+  requireTaskStatusDefinition(taskLifecycle, storedTask.status, {
+    taskId: storedTask.id,
+  });
 
   const transition = taskLifecycle.transition(storedTask.status, input.action);
   if (!transition.ok) {
     throwLightTaskError(transition.error);
   }
+  transition.hooks?.apply?.({
+    currentStatus: storedTask.status,
+    action: input.action,
+    nextStatus: transition.status,
+  });
 
   const nextRevision = bumpRevision(storedTask, clockNow(), normalizedIdempotencyKey);
   const nextTask: PersistedLightTask = {
     ...clonePersistedTask(storedTask),
     status: transition.status,
-    steps: applyTaskStepProgress(
-      storedTask.steps,
-      input.action,
-      taskLifecycle.resolveStepProgress(input.action),
-    ),
+    steps: applyTaskStepProgress(storedTask.steps, taskLifecycle.resolveStepProgress(input.action)),
     revision: nextRevision.revision,
     updatedAt: nextRevision.updatedAt,
     idempotencyKey: nextRevision.idempotencyKey,
@@ -119,6 +121,11 @@ export function advanceTaskUseCase(
   }
 
   const publicTask = toPublicTask(saved.task);
+  transition.hooks?.notify?.({
+    currentStatus: storedTask.status,
+    action: input.action,
+    nextStatus: transition.status,
+  });
   publishTaskAdvancedEvent(publishEvent, publicTask);
   return publicTask;
 }

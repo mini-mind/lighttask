@@ -9,14 +9,8 @@ export type {
   RuntimeLifecycleStatus,
 } from "./ds-status";
 export {
-  DEFAULT_TASK_ACTIVE_STATUSES,
   DEFAULT_RUNTIME_TERMINAL_STATUSES,
-  DEFAULT_TASK_TERMINAL_STATUSES,
-  TASK_STATUSES,
-  isDefaultTaskStatus,
-  isTaskActiveStatus,
   isTaskStatus,
-  isTaskTerminalStatus,
   isRuntimeTerminalStatus,
 } from "./ds-status";
 
