@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { TaskRepository } from "../adapters";
 import { LightTaskError, createLightTask } from "../index";
-import type { TaskRepository } from "../ports";
-import { createTestLightTaskOptions } from "./ports-fixture";
+import { DEFAULT_TASK_POLICY_ID, createTestLightTaskOptions } from "./adapters-fixture";
 
 test("Error Boundary：缺失端口方法时统一抛出 LightTaskError", () => {
   const lighttask = createLightTask({
@@ -24,7 +24,7 @@ test("Error Boundary：缺失端口方法时统一抛出 LightTaskError", () => 
   });
 
   assert.throws(
-    () => lighttask.listTasks(),
+    () => lighttask.tasks.list(),
     (error) => {
       assert.ok(error instanceof LightTaskError);
       assert.equal(error.code, "VALIDATION_ERROR");
@@ -62,14 +62,15 @@ test("Error Boundary：仓储抛出原生异常时归一化为 INVARIANT_VIOLATI
     },
   };
   const lighttask = createLightTask(createTestLightTaskOptions({ taskRepository }));
-  lighttask.createPlan({
+  lighttask.plans.create({
     id: "plan_error",
     title: "错误计划",
+    taskPolicyId: DEFAULT_TASK_POLICY_ID,
   });
 
   assert.throws(
     () =>
-      lighttask.createTask({
+      lighttask.tasks.create({
         planId: "plan_error",
         title: "任务一",
       }),

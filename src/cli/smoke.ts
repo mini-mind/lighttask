@@ -1,12 +1,14 @@
-import { createLightTaskError } from "../core/lighttask-error";
-import { LightTaskError, createLightTask } from "../index";
 import {
   createInMemoryPlanRepository,
   createInMemoryTaskRepository,
   createNoopConsistencyPort,
   createSystemClock,
   createTaskIdGenerator,
-} from "../ports/in-memory";
+} from "../adapters/memory";
+import { createLightTaskError } from "../api/lighttask-error";
+import { LightTaskError, createLightTask } from "../index";
+
+const CLI_TASK_POLICY_ID = "cli_default";
 
 function printHelp(): void {
   console.log("LightTask CLI");
@@ -16,15 +18,16 @@ function printHelp(): void {
 }
 
 function ensurePlan(lighttask: ReturnType<typeof createLightTask>, planId: string): void {
-  if (!lighttask.getPlan(planId)) {
-    lighttask.createPlan({
+  if (!lighttask.plans.get(planId)) {
+    lighttask.plans.create({
       id: planId,
       title: "CLI 默认计划",
+      taskPolicyId: CLI_TASK_POLICY_ID,
     });
   }
 }
 
-function createCliTaskLifecycle() {
+function createCliTaskPolicy() {
   const statuses = new Map([
     ["draft", { key: "draft", editable: true, schedulable: false, active: false, terminal: false }],
     ["todo", { key: "todo", editable: false, schedulable: true, active: false, terminal: false }],
@@ -132,16 +135,35 @@ function createCliTaskLifecycle() {
   };
 }
 
+function createCliTaskPolicies(taskPolicy: ReturnType<typeof createCliTaskPolicy>) {
+  return {
+    get(policyId: string) {
+      return policyId === CLI_TASK_POLICY_ID ? taskPolicy : undefined;
+    },
+    list() {
+      return [
+        {
+          id: CLI_TASK_POLICY_ID,
+          initialStatus: taskPolicy.initialStatus,
+          statusKeys: taskPolicy.listStatuses().map((status) => status.key),
+          actionKeys: taskPolicy.listActionDefinitions().map((action) => action.key),
+        },
+      ];
+    },
+  };
+}
+
 function run(): void {
   const [, , command, ...rest] = process.argv;
-  const taskLifecycle = createCliTaskLifecycle();
+  const taskPolicy = createCliTaskPolicy();
+  const taskPolicies = createCliTaskPolicies(taskPolicy);
   const lighttask = createLightTask({
     taskRepository: createInMemoryTaskRepository(),
     planRepository: createInMemoryPlanRepository(),
     consistency: createNoopConsistencyPort(),
     clock: createSystemClock(),
     idGenerator: createTaskIdGenerator(),
-    taskLifecycle,
+    taskPolicies,
   });
 
   if (!command || command === "help") {
@@ -151,20 +173,20 @@ function run(): void {
 
   if (command === "demo") {
     ensurePlan(lighttask, "plan_cli_demo");
-    const task = lighttask.createTask({
+    const task = lighttask.tasks.create({
       planId: "plan_cli_demo",
       title: "演示：收敛 LightTask 通用内核",
       summary: "通过 CLI 冒烟验证公共 API",
     });
-    const finalized = lighttask.advanceTask(task.id, {
+    const finalized = lighttask.tasks.move(task.id, {
       action: "finalize",
       expectedRevision: task.revision,
     });
-    const dispatched = lighttask.advanceTask(task.id, {
+    const dispatched = lighttask.tasks.move(task.id, {
       action: "dispatch",
       expectedRevision: finalized.revision,
     });
-    console.log(JSON.stringify(lighttask.getTask(dispatched.id), null, 2));
+    console.log(JSON.stringify(lighttask.tasks.get(dispatched.id), null, 2));
     return;
   }
 
@@ -177,7 +199,7 @@ function run(): void {
     ensurePlan(lighttask, "plan_cli_default");
     console.log(
       JSON.stringify(
-        lighttask.createTask({
+        lighttask.tasks.create({
           planId: "plan_cli_default",
           title,
         }),

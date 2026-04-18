@@ -19,7 +19,6 @@ LightTask 是面向上层业务应用的 TypeScript 编排内核。
 - `Runtime` 像执行过程记录。
 - `Output` 像这次执行留下来的结果物。
 
-LightTask 不要求你先画一张 `Graph` 再开始工作。  
 真正参与编排的只有一组 `Task`，系统直接根据这些 `Task` 的依赖关系计算：
 
 - 现在谁可以并行开始
@@ -31,7 +30,8 @@ LightTask 不要求你先画一张 `Graph` 再开始工作。
 ### `Plan`
 
 - 只是任务分组边界
-- 不再承接“启动流程”“确认计划”“冻结流程图”这类职责
+- 创建时必须绑定 `taskPolicyId`
+- 不承接“启动流程”“确认计划”“冻结依赖基线”这类职责
 
 ### `Task`
 
@@ -58,7 +58,7 @@ LightTask 不要求你先画一张 `Graph` 再开始工作。
 ```text
 Plan 1 --- n Task
 Task n --- n Task   (通过 dependsOnTaskIds，且只能同 Plan)
-Task 1 --- n SchedulingFactView
+Task 1 --- n PlanSchedulingTaskFactsView
 Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 ```
 
@@ -75,30 +75,31 @@ Task 1 --- n Runtime? / Output?   (通过 refs 建弱关联)
 LightTask 只提供一条任务状态轴：
 
 - `TaskStatus = string`
-- 合法状态必须由应用层在 `taskLifecycle` 中注册
-- `createTask` 永远只会创建到该策略的 `initialStatus`
+- 合法状态必须由应用层注册到某个 `taskPolicy`
+- `lighttask.tasks.create` 永远只会创建到所属 `Plan.taskPolicyId` 对应策略的 `initialStatus`
 
 LightTask 不再内置任何预设 Task 状态。  
 像 `draft / todo / running / completed` 这类名字，只能存在于某个应用自己的生命周期配置里，不能再被当成内核事实。
 
 ## 生命周期策略
 
-`taskLifecycle` 是必填配置。  
+`taskPolicies` 是必填配置。  
 你在创建 `LightTask` 实例前，必须先注册：
 
 - 状态定义
 - 动作定义
 - 合法转移
 
-也就是说，LightTask 不会偷偷回退到一套默认状态机。
+同时每个 `Plan` 在创建时必须声明自己的 `taskPolicyId`。  
+也就是说，LightTask 不会偷偷回退到一套默认状态机，也不会把单一策略强塞给所有计划。
 
 这套策略对象会驱动：
 
-- `createTask` 初始状态
-- `advanceTask` 状态迁移与步骤推进策略
-- `advanceTask` 的 runnable 准入动作
-- `updateTask` 的可编辑状态边界
-- `getPlanSchedulingFacts` 的分类与原因码解释
+- `lighttask.tasks.create` 的初始状态
+- `lighttask.tasks.move` 的状态迁移与步骤推进策略
+- `lighttask.tasks.move` 的 runnable 准入动作
+- `lighttask.tasks.update` 的可编辑状态边界
+- `lighttask.plans.schedule` 的分类与原因码解释
 
 ## 调度语义
 
@@ -116,9 +117,22 @@ LightTask 不再内置任何预设 Task 状态。
 
 注意：
 
-- `getPlanSchedulingFacts` 会返回 `editable / runnable / blocked / active / terminal / risky` 等中性调度事实，并在 `byTaskId` 中解释每个任务当前所处的可执行性与风险
+- `lighttask.plans.schedule` 会返回 `editable / runnable / blocked / active / terminal / risky` 等中性调度事实，并在 `byTaskId` 中解释每个任务当前所处的可执行性与风险
 - “阻塞”与“风险”都是调度事实，不是新的任务状态
-- `getPlanSchedulingFacts` 读到的是即时视图，不是额外持久化的一张表
+- `lighttask.plans.schedule` 读到的是即时视图，不是额外持久化的一张表
+
+## 推荐接入主链
+
+推荐直接围绕任务集合接入：
+
+```text
+Plan
+  -> tasks.create
+  -> tasks.update
+  -> tasks.move
+  -> plans.schedule
+  -> runs / outputs 留痕
+```
 
 ## 编辑权限边界
 
@@ -146,26 +160,16 @@ LightTask 对删除任务采取稳妥兜底：
 - 是否允许删除、是否提醒用户、是否备份记录，由应用层自己决定
 - LightTask 不内置软删除、归档箱或恢复站
 
-## 不采用的接入方式
-
-下面这些接法不属于 LightTask 的公开主链：
-
-- `Graph` 作为公开主对象
-- `publishGraph`
-- `materializePlanTasks`
-- `launchPlan`
-- “先发布图，再物化任务，再启动计划”这条长链
-
 ## 最小启动
 
-如果你只是想把当前仓库里的现有实现先跑起来，可以继续使用公开的 `lighttask/ports/in-memory` 适配器：
+如果你只是想把当前仓库里的现有实现先跑起来，可以继续使用公开的 `lighttask/adapters/memory` 适配器：
 
 ```ts
 import { createLightTask } from "lighttask";
-import { createInMemoryLightTaskPorts } from "lighttask/ports/in-memory";
-import { createTaskLifecyclePolicy } from "lighttask/rules";
+import { createInMemoryLightTaskPorts } from "lighttask/adapters/memory";
+import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "lighttask/policies";
 
-const taskLifecycle = createTaskLifecyclePolicy({
+const taskPolicy = createTaskLifecyclePolicy({
   initialStatus: "draft",
   statusDefinitions: [
     {
@@ -204,9 +208,19 @@ const taskLifecycle = createTaskLifecyclePolicy({
 
 const lighttask = createLightTask(
   createInMemoryLightTaskPorts({
-    taskLifecycle,
+    taskPolicies: createTaskPolicyRegistry({
+      policies: {
+        default: taskPolicy,
+      },
+    }),
   }),
 );
+
+lighttask.plans.create({
+  id: "plan_alpha",
+  title: "需求 Alpha",
+  taskPolicyId: "default",
+});
 ```
 
 如果你想继续看设计约束与接入心智，优先阅读架构文档、应用层接入指南和生命周期策略说明。

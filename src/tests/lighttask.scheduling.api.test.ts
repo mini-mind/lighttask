@@ -1,68 +1,71 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PersistedLightTask } from "../core/types";
+import { createInMemoryTaskRepository } from "../adapters/memory";
+import type { PersistedLightTask } from "../api/types";
 import { LightTaskError, createLightTask } from "../index";
-import { createInMemoryTaskRepository } from "../ports/in-memory";
-import { createTestLightTask } from "./ports-fixture";
-import { createTestLightTaskOptions } from "./ports-fixture";
+import {
+  DEFAULT_TASK_POLICY_ID,
+  createTestLightTask,
+  createTestLightTaskOptions,
+} from "./adapters-fixture";
 
 test("Scheduling Facts：能区分 draft/runnable/blocked/active/terminal/risk", () => {
   const { lighttask, planId } = createTestLightTask();
-  const draft = lighttask.createTask({
+  const draft = lighttask.tasks.create({
     planId,
     title: "草稿",
   });
-  const runnable = lighttask.createTask({
+  const runnable = lighttask.tasks.create({
     planId,
     title: "可执行",
   });
-  const blocked = lighttask.createTask({
+  const blocked = lighttask.tasks.create({
     planId,
     title: "被阻塞",
     dependsOnTaskIds: [draft.id],
   });
-  const active = lighttask.createTask({
+  const active = lighttask.tasks.create({
     planId,
     title: "进行中",
   });
-  const terminal = lighttask.createTask({
+  const terminal = lighttask.tasks.create({
     planId,
     title: "已完成",
   });
 
-  const runnableTodo = lighttask.advanceTask(runnable.id, {
+  const runnableTodo = lighttask.tasks.move(runnable.id, {
     action: "finalize",
     expectedRevision: runnable.revision,
   });
-  const blockedTodo = lighttask.advanceTask(blocked.id, {
+  const blockedTodo = lighttask.tasks.move(blocked.id, {
     action: "finalize",
     expectedRevision: blocked.revision,
   });
-  const activeTodo = lighttask.advanceTask(active.id, {
+  const activeTodo = lighttask.tasks.move(active.id, {
     action: "finalize",
     expectedRevision: active.revision,
   });
-  const activeDispatched = lighttask.advanceTask(active.id, {
+  const activeDispatched = lighttask.tasks.move(active.id, {
     action: "dispatch",
     expectedRevision: activeTodo.revision,
   });
-  const activeRunning = lighttask.advanceTask(active.id, {
+  const activeRunning = lighttask.tasks.move(active.id, {
     action: "start",
     expectedRevision: activeDispatched.revision,
   });
-  const terminalTodo = lighttask.advanceTask(terminal.id, {
+  const terminalTodo = lighttask.tasks.move(terminal.id, {
     action: "finalize",
     expectedRevision: terminal.revision,
   });
-  const terminalDispatched = lighttask.advanceTask(terminal.id, {
+  const terminalDispatched = lighttask.tasks.move(terminal.id, {
     action: "dispatch",
     expectedRevision: terminalTodo.revision,
   });
-  const terminalRunning = lighttask.advanceTask(terminal.id, {
+  const terminalRunning = lighttask.tasks.move(terminal.id, {
     action: "start",
     expectedRevision: terminalDispatched.revision,
   });
-  const terminalCompleted = lighttask.advanceTask(terminal.id, {
+  const terminalCompleted = lighttask.tasks.move(terminal.id, {
     action: "complete",
     expectedRevision: terminalRunning.revision,
   });
@@ -72,7 +75,7 @@ test("Scheduling Facts：能区分 draft/runnable/blocked/active/terminal/risk",
   assert.equal(activeRunning.status, "running");
   assert.equal(terminalCompleted.status, "completed");
 
-  const facts = lighttask.getPlanSchedulingFacts(planId);
+  const facts = lighttask.plans.schedule(planId);
   assert.deepEqual(facts.editableTaskIds, [draft.id]);
   assert.deepEqual(facts.runnableTaskIds, [runnable.id]);
   assert.deepEqual(facts.blockedTaskIds, [blocked.id]);
@@ -113,11 +116,12 @@ test("Scheduling Facts：todo 返回 draft 后，已开始下游被标记为风�
     }),
   );
   const planId = "plan_risk";
-  lighttask.createPlan({
+  lighttask.plans.create({
     id: planId,
     title: "风险计划",
+    taskPolicyId: DEFAULT_TASK_POLICY_ID,
   });
-  const facts = lighttask.getPlanSchedulingFacts(planId);
+  const facts = lighttask.plans.schedule(planId);
   assert.deepEqual(facts.riskyTaskIds, ["task_downstream"]);
   assert.deepEqual(facts.byTaskId.task_downstream.riskReasonCodes, [
     "upstream_became_not_schedulable",
@@ -186,12 +190,13 @@ test("Scheduling Facts：failed/cancelled/missing 依赖会映射到明确阻塞
       taskRepository,
     }),
   );
-  lighttask.createPlan({
+  lighttask.plans.create({
     id: "plan_blocked",
     title: "阻塞计划",
+    taskPolicyId: DEFAULT_TASK_POLICY_ID,
   });
 
-  const facts = lighttask.getPlanSchedulingFacts("plan_blocked");
+  const facts = lighttask.plans.schedule("plan_blocked");
   assert.deepEqual(facts.byTaskId.task_wait_failed.blockReasonCodes, ["dependency_failed"]);
   assert.deepEqual(facts.byTaskId.task_wait_cancelled.blockReasonCodes, ["dependency_cancelled"]);
   assert.deepEqual(facts.byTaskId.task_wait_missing.blockReasonCodes, ["dependency_missing"]);
@@ -200,25 +205,25 @@ test("Scheduling Facts：failed/cancelled/missing 依赖会映射到明确阻塞
 
 test("Scheduling Facts：未完成上游会映射为 dependency_not_done", () => {
   const { lighttask, planId } = createTestLightTask("plan_not_done");
-  const upstream = lighttask.createTask({
+  const upstream = lighttask.tasks.create({
     planId,
     title: "上游",
   });
-  const downstream = lighttask.createTask({
+  const downstream = lighttask.tasks.create({
     planId,
     title: "下游",
     dependsOnTaskIds: [upstream.id],
   });
-  const upstreamTodo = lighttask.advanceTask(upstream.id, {
+  const upstreamTodo = lighttask.tasks.move(upstream.id, {
     action: "finalize",
     expectedRevision: upstream.revision,
   });
-  const downstreamTodo = lighttask.advanceTask(downstream.id, {
+  const downstreamTodo = lighttask.tasks.move(downstream.id, {
     action: "finalize",
     expectedRevision: downstream.revision,
   });
 
-  const facts = lighttask.getPlanSchedulingFacts(planId);
+  const facts = lighttask.plans.schedule(planId);
   assert.equal(upstreamTodo.status, "todo");
   assert.equal(downstreamTodo.status, "todo");
   assert.deepEqual(facts.byTaskId[downstream.id].blockReasonCodes, ["dependency_not_done"]);
@@ -227,26 +232,27 @@ test("Scheduling Facts：未完成上游会映射为 dependency_not_done", () =>
 
 test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖和环依赖", () => {
   const { lighttask, planId } = createTestLightTask("plan_dep_a");
-  lighttask.createPlan({
+  lighttask.plans.create({
     id: "plan_dep_b",
     title: "计划 B",
+    taskPolicyId: DEFAULT_TASK_POLICY_ID,
   });
-  const taskA = lighttask.createTask({
+  const taskA = lighttask.tasks.create({
     planId,
     title: "任务 A",
   });
-  const taskB = lighttask.createTask({
+  const taskB = lighttask.tasks.create({
     planId,
     title: "任务 B",
   });
-  const taskOtherPlan = lighttask.createTask({
+  const taskOtherPlan = lighttask.tasks.create({
     planId: "plan_dep_b",
     title: "任务 C",
   });
 
   assert.throws(
     () =>
-      lighttask.createTask({
+      lighttask.tasks.create({
         planId,
         title: "跨计划创建",
         dependsOnTaskIds: [taskOtherPlan.id],
@@ -260,7 +266,7 @@ test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖
 
   assert.throws(
     () =>
-      lighttask.updateTask(taskA.id, {
+      lighttask.tasks.update(taskA.id, {
         expectedRevision: taskA.revision,
         dependsOnTaskIds: [taskA.id],
       }),
@@ -273,7 +279,7 @@ test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖
 
   assert.throws(
     () =>
-      lighttask.updateTask(taskA.id, {
+      lighttask.tasks.update(taskA.id, {
         expectedRevision: taskA.revision,
         dependsOnTaskIds: [taskOtherPlan.id],
       }),
@@ -284,7 +290,7 @@ test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖
     },
   );
 
-  const taskBLinked = lighttask.updateTask(taskB.id, {
+  const taskBLinked = lighttask.tasks.update(taskB.id, {
     expectedRevision: taskB.revision,
     dependsOnTaskIds: [taskA.id],
   });
@@ -292,7 +298,7 @@ test("Scheduling/Dependency：创建与编辑阶段会拒绝跨 Plan、自依赖
 
   assert.throws(
     () =>
-      lighttask.updateTask(taskA.id, {
+      lighttask.tasks.update(taskA.id, {
         expectedRevision: taskA.revision,
         dependsOnTaskIds: [taskB.id],
       }),

@@ -19,27 +19,27 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./data-structures": {
-      "types": "./dist/data-structures/index.d.ts",
-      "default": "./dist/data-structures/index.js"
+    "./models": {
+      "types": "./dist/models/index.d.ts",
+      "default": "./dist/models/index.js"
     },
-    "./rules": {
-      "types": "./dist/rules/index.d.ts",
-      "default": "./dist/rules/index.js"
+    "./policies": {
+      "types": "./dist/policies/index.d.ts",
+      "default": "./dist/policies/index.js"
     },
-    "./ports": {
-      "types": "./dist/ports/index.d.ts",
-      "default": "./dist/ports/index.js"
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "default": "./dist/adapters/index.js"
     },
-    "./ports/in-memory": {
-      "types": "./dist/ports/in-memory.d.ts",
-      "default": "./dist/ports/in-memory.js"
+    "./adapters/memory": {
+      "types": "./dist/adapters/memory.d.ts",
+      "default": "./dist/adapters/memory.js"
     }
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "test": "npm run build && node --test ./dist/tests",
-    "test:api": "npm run build && node --test ./dist/tests/lighttask.plan.api.test.js ./dist/tests/lighttask.query.api.test.js ./dist/tests/lighttask.scheduling.api.test.js ./dist/tests/lighttask.notify.api.test.js ./dist/tests/lighttask.task.flow.api.test.js ./dist/tests/lighttask.task.idempotency.api.test.js ./dist/tests/lighttask.task.error-boundary.api.test.js ./dist/tests/lighttask.runtime.api.test.js ./dist/tests/lighttask.output.api.test.js ./dist/tests/public-export-contract.test.js ./dist/tests/rules.fsm.test.js ./dist/tests/data-structures.test.js ./dist/tests/ports.in-memory.test.js",
+    "test:api": "npm run build && node --test ./dist/tests/lighttask.grouped.api.test.js ./dist/tests/lighttask.lifecycle.api.test.js ./dist/tests/lighttask.plan.api.test.js ./dist/tests/lighttask.query.api.test.js ./dist/tests/lighttask.scheduling.api.test.js ./dist/tests/lighttask.notify.api.test.js ./dist/tests/lighttask.task.flow.api.test.js ./dist/tests/lighttask.task.idempotency.api.test.js ./dist/tests/lighttask.task.error-boundary.api.test.js ./dist/tests/lighttask.runtime.api.test.js ./dist/tests/lighttask.output.api.test.js ./dist/tests/public-export-contract.test.js ./dist/tests/policies.fsm.test.js ./dist/tests/models.test.js ./dist/tests/adapters.memory.test.js",
     "test:cli": "npm run build && node --test ./dist/tests/cli.test.js",
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "arch:check": "node scripts/arch-check.mjs",

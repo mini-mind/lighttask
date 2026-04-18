@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LightTaskError, createLightTaskError, toLightTaskError } from "../core/lighttask-error";
-import { createCoreError } from "../data-structures";
+import { LightTaskError, createLightTaskError, toLightTaskError } from "../api/lighttask-error";
+import { createCoreError } from "../models";
 
-test("错误适配层：createLightTaskError 复用 data-structures 的唯一错误模型", () => {
+test("错误适配层：createLightTaskError 复用 models 的唯一错误模型", () => {
   const details = {
     field: {
       name: "title",

@@ -1,5 +1,5 @@
-export { createLightTask } from "./core/lighttask";
-export { LightTaskError } from "./core/lighttask-error";
+export { createLightTask } from "./api/lighttask";
+export { LightTaskError } from "./api/lighttask-error";
 
 export type {
   OutputLifecycleStatus,
@@ -7,7 +7,7 @@ export type {
   RuntimeParentRef,
   RuntimeRelatedRef,
   TaskStatus,
-} from "./data-structures";
+} from "./models";
 
 export type {
   AdvanceOutputInput,
@@ -20,6 +20,12 @@ export type {
   CreateTaskInput,
   DeleteTaskInput,
   DeleteTaskResult,
+  DeleteOutputInput,
+  DeleteOutputResult,
+  DeletePlanInput,
+  DeletePlanResult,
+  DeleteRuntimeInput,
+  DeleteRuntimeResult,
   GetPlanSchedulingFactsResult,
   ListOutputsInput,
   ListRuntimesInput,
@@ -27,23 +33,30 @@ export type {
   LightTaskDomainEvent,
   LightTaskDomainEventType,
   LightTaskKernel,
+  LightTaskOutputsApi,
   LightTaskOutput,
   LightTaskOutputItem,
   LightTaskOutputItemInput,
   LightTaskOutputItemStatus,
   LightTaskPlan,
+  LightTaskPlansApi,
+  LightTaskRunsApi,
   LightTaskRuntime,
   LightTaskStep,
+  LightTaskTasksApi,
   LightTaskTask,
   OutputAdvancedEvent,
   OutputCreatedEvent,
+  OutputDeletedEvent,
   PlanCreatedEvent,
+  PlanDeletedEvent,
   PlanSchedulingBlockReasonCode,
   PlanSchedulingRiskReasonCode,
   PlanSchedulingTaskFacts,
   PlanUpdatedEvent,
   RuntimeAdvancedEvent,
   RuntimeCreatedEvent,
+  RuntimeDeletedEvent,
   TaskAdvancedEvent,
   TaskCreatedEvent,
   TaskDeletedEvent,
@@ -51,4 +64,4 @@ export type {
   TaskUpdatedEvent,
   UpdatePlanInput,
   UpdateTaskInput,
-} from "./core/types";
+} from "./api/types";

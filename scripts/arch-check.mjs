@@ -19,7 +19,7 @@ const PACKAGE_JSON = fs.existsSync(PACKAGE_JSON_FILE)
   ? JSON.parse(fs.readFileSync(PACKAGE_JSON_FILE, "utf8"))
   : undefined;
 
-const KNOWN_LAYERS = ["data-structures", "rules", "core", "cli", "tests", "ports"];
+const KNOWN_LAYERS = ["models", "policies", "api", "cli", "tests", "adapters"];
 const INTERNAL_ALIAS_PREFIXES = ["@/", "~/", "src/"];
 const PACKAGE_NAME = PACKAGE_JSON?.name;
 const DECLARED_EXTERNAL_PACKAGES = new Set([
@@ -41,13 +41,13 @@ const BUILTIN_MODULES = new Set([
  * - 非相对导入只接受包自身子入口与显式内部别名前缀，避免再靠层名关键字做猜测。
  */
 const ALLOW_IMPORT_MATRIX = {
-  "data-structures": new Set(["data-structures"]),
-  rules: new Set(["rules", "data-structures"]),
-  core: new Set(["core", "rules", "ports", "data-structures"]),
-  cli: new Set(["cli", "core", "ports", "data-structures", "root"]),
-  tests: new Set(["tests", "core", "rules", "data-structures", "cli", "ports", "root"]),
-  ports: new Set(["ports", "data-structures"]),
-  root: new Set(["root", "core", "rules", "data-structures"]),
+  models: new Set(["models"]),
+  policies: new Set(["policies", "models"]),
+  api: new Set(["api", "policies", "adapters", "models"]),
+  cli: new Set(["cli", "api", "adapters", "models", "root"]),
+  tests: new Set(["tests", "api", "policies", "models", "cli", "adapters", "root"]),
+  adapters: new Set(["adapters", "models"]),
+  root: new Set(["root", "api", "policies", "models"]),
 };
 
 function listSourceFiles(dir) {
@@ -225,7 +225,7 @@ function describeUnknownNonRelativeImport(specifier) {
 }
 
 function isForbiddenDataStructuresLeafImport(sourceLayer, specifier) {
-  if (sourceLayer !== "core" && sourceLayer !== "ports") {
+  if (sourceLayer !== "api" && sourceLayer !== "adapters") {
     return false;
   }
   if (!specifier.startsWith(".")) {
@@ -233,7 +233,7 @@ function isForbiddenDataStructuresLeafImport(sourceLayer, specifier) {
   }
 
   const normalized = specifier.replaceAll("\\", "/");
-  return normalized.includes("/data-structures/ds-");
+  return normalized.includes("/models/ds-");
 }
 
 function isAllowedCorePortsTarget(filePath) {
@@ -242,7 +242,7 @@ function isAllowedCorePortsTarget(filePath) {
 }
 
 function isForbiddenCorePortsImplementationImport(sourceLayer, fromFilePath, specifier) {
-  if (sourceLayer !== "core" || !specifier.startsWith(".")) {
+  if (sourceLayer !== "api" || !specifier.startsWith(".")) {
     return false;
   }
 
@@ -251,7 +251,7 @@ function isForbiddenCorePortsImplementationImport(sourceLayer, fromFilePath, spe
     return false;
   }
   const resolvedRealPath = tryRealpath(resolvedPath);
-  if (!resolvedRealPath || getFileLayer(resolvedRealPath) !== "ports") {
+  if (!resolvedRealPath || getFileLayer(resolvedRealPath) !== "adapters") {
     return false;
   }
 
@@ -304,13 +304,13 @@ function checkSourceFile(filePath, violations) {
   for (const specifier of imports) {
     if (isForbiddenDataStructuresLeafImport(sourceLayer, specifier)) {
       violations.push(
-        `${rel}: ${sourceLayer} 层禁止深层依赖 data-structures 叶子模块，应改走稳定入口或本层私有封装 -> "${specifier}"`,
+        `${rel}: ${sourceLayer} 层禁止深层依赖 models 叶子模块，应改走稳定入口或本层私有封装 -> "${specifier}"`,
       );
       continue;
     }
     if (isForbiddenCorePortsImplementationImport(sourceLayer, filePath, specifier)) {
       violations.push(
-        `${rel}: core 层禁止依赖 ports 实现文件，应改走 ports 稳定入口（index/port-*） -> "${specifier}"`,
+        `${rel}: api 层禁止依赖 adapters 实现文件，应改走 adapters 稳定入口（index/port-*） -> "${specifier}"`,
       );
       continue;
     }

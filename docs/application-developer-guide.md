@@ -2,14 +2,14 @@
 
 这份指南只回答一件事：
 
-`应用层应该怎样在不依赖 Graph 的前提下接入 LightTask。`
+`应用层应该怎样把自己的产品对象接到 LightTask 上。`
 
 ## 1. 先记住四句话
 
 1. `Plan` 只是任务分组容器
 2. `Task` 是唯一真源对象
 3. 依赖关系直接挂在 `Task` 上
-4. `taskLifecycle` 必须由应用层显式注册
+4. `taskPolicies` 必须由应用层显式注册，且每个 `Plan` 都要绑定自己的 `taskPolicyId`
 
 如果换成产品语言去记：
 
@@ -62,23 +62,24 @@
 ### 第一步：先建 `Plan`
 
 ```ts
-lighttask.createPlan({
+lighttask.plans.create({
   id: "plan_alpha",
   title: "需求 Alpha",
+  taskPolicyId: "default",
 });
 ```
 
 `Plan` 只是这个需求下任务的分组容器。
 
-### 第二步：先注册生命周期，再建任务
+### 第二步：先注册任务策略，再建任务
 
-`createTask` 不再接受任意 `status`。  
-任务创建时会自动落到 `taskLifecycle.initialStatus`。
+`lighttask.tasks.create` 不接受任意 `status`。  
+任务创建时会自动落到所属 `Plan.taskPolicyId` 对应策略的 `initialStatus`。
 
 例如，应用层可以先注册一套自己的生命周期：
 
 ```ts
-const taskLifecycle = createTaskLifecyclePolicy({
+const taskPolicy = createTaskLifecyclePolicy({
   initialStatus: "draft",
   statusDefinitions: [
     { key: "draft", editable: true, schedulable: false, active: false, terminal: false },
@@ -100,7 +101,7 @@ const taskLifecycle = createTaskLifecyclePolicy({
 然后再创建任务：
 
 ```ts
-lighttask.createTask({
+lighttask.tasks.create({
   planId: "plan_alpha",
   title: "起草方案",
   dependsOnTaskIds: [],
@@ -131,7 +132,7 @@ lighttask.createTask({
 
 - `steps[].id / title / stage` 属于任务定义
 - `steps[].status` 属于运行留痕
-- 所以应用层只能在 `draft` 态改步骤定义，正式态下步骤状态只能由 LightTask 推进
+- 所以应用层只能在当前可编辑状态里改步骤定义，进入非编辑态后步骤状态只能由 LightTask 推进
 - 写接口里的 `idempotencyKey` 是请求级幂等参数，不是任务定义字段本身
 
 ### 第四步：编辑完成后，把任务推进到正式可调度状态
@@ -139,7 +140,7 @@ lighttask.createTask({
 任务准备好了，再进入正式待办：
 
 ```ts
-lighttask.advanceTask(taskId, {
+lighttask.tasks.move(taskId, {
   expectedRevision,
   action: "finalize",
 });
@@ -147,15 +148,14 @@ lighttask.advanceTask(taskId, {
 
 不需要：
 
-- 先画 Graph
-- 再发布 Graph
-- 再物化任务
-- 再启动计划
+- 先生成额外的中间编排对象
+- 再把它们转换回任务
+- 再单独触发额外流程开关
 
 ### 第五步：读取调度事实
 
 ```ts
-const facts = lighttask.getPlanSchedulingFacts("plan_alpha");
+const facts = lighttask.plans.schedule("plan_alpha");
 ```
 
 应用层重点看这些信息：
@@ -202,7 +202,7 @@ LightTask 不会负责：
 
 这些都交给应用层处理。
 
-## 5. `taskLifecycle` 应该怎样设计
+## 5. `taskPolicy` 应该怎样设计
 
 你至少要明确注册 3 类东西：
 
@@ -214,10 +214,10 @@ LightTask 不会负责：
 
 ```ts
 import { createLightTask } from "lighttask";
-import { createInMemoryLightTaskPorts } from "lighttask/ports/in-memory";
-import { createTaskLifecyclePolicy } from "lighttask/rules";
+import { createInMemoryLightTaskPorts } from "lighttask/adapters/memory";
+import { createTaskLifecyclePolicy, createTaskPolicyRegistry } from "lighttask/policies";
 
-const taskLifecycle = createTaskLifecyclePolicy({
+const taskPolicy = createTaskLifecyclePolicy({
   initialStatus: "todo",
   statusDefinitions: [
     {
@@ -245,34 +245,26 @@ const taskLifecycle = createTaskLifecyclePolicy({
 
 const lighttask = createLightTask(
   createInMemoryLightTaskPorts({
-    taskLifecycle,
+    taskPolicies: createTaskPolicyRegistry({
+      policies: {
+        default: taskPolicy,
+      },
+    }),
   }),
 );
 ```
 
 这里要记住两条边界：
 
-- `taskLifecycle` 已经可以驱动 `createTask / advanceTask / updateTask / getPlanSchedulingFacts`
-- `TaskStatus` 与 `TaskAction` 都已经放开成 `string`，但是否合法仍必须由你传入的 `taskLifecycle` 先注册
+- `taskPolicy` 已经可以驱动 `tasks.create / tasks.move / tasks.update / plans.schedule`
+- `TaskStatus` 与 `TaskAction` 都已经放开成 `string`，但是否合法仍必须由你注册到某个 `taskPolicy`
 
-## 6. 不推荐的接法
-
-以下接法不推荐：
-
-- 先把任务关系画成 Graph，再把 Graph 视为真源
-- 依赖 `publishGraph`
-- 依赖 `materializePlanTasks`
-- 依赖 `launchPlan`
-- 把“计划是否启动”当成调度开关
-
-这些都会让接入链路更长，也会让应用层心智更重。
-
-## 7. 删除任务的推荐理解
+## 6. 删除任务的推荐理解
 
 删除某个任务时：
 
 - LightTask 自动解除同一 `Plan` 内其他任务对它的依赖
-- LightTask 重新计算调度事实
+- LightTask 会在一致性边界内重建一次调度结果，确保解绑后的系统状态仍然自洽
 - 如果删除请求携带 `idempotencyKey`，重复重试同一请求时返回同一份删除结果摘要
 
 应用层自己决定：
@@ -287,7 +279,7 @@ const lighttask = createLightTask(
 - 内核只保证删了以后系统依赖关系不会炸
 - 产品级治理由应用层自己承担
 
-## 8. 应用层最需要关心的两个输出
+## 7. 应用层最需要关心的两个输出
 
 ### `blockReasonCodes`
 
@@ -326,7 +318,7 @@ const lighttask = createLightTask(
 同样地，风险也应按“原因代码数组”理解，而不是假设只有单一风险标签。
 
 
-## 9. 哪些能力不要往内核里塞
+## 8. 哪些能力不要往内核里塞
 
 这些能力应留在应用层：
 
@@ -340,26 +332,17 @@ const lighttask = createLightTask(
 
 LightTask 只负责稳定的公共编排语义，不负责替应用层做完整产品。
 
-## 10. 一句话接入建议
+## 9. 一句话接入建议
 
 应用层接 LightTask，推荐主链应当是：
 
 ```text
 业务对象/草稿
-  -> 映射为 Plan + draft Task
-  -> 编辑 draft Task
-  -> finalize 成 todo
+  -> 映射为 Plan + 应用层定义的可编辑 Task
+  -> 编辑这批可编辑 Task
+  -> 通过 tasks.move 进入应用层定义的正式可调度状态
   -> 读取调度事实
   -> 上层执行器挑 runnable Task 执行
-  -> advanceTask 推进状态
+  -> tasks.move 推进状态
   -> Runtime / Output 留痕
 ```
-
-如果你发现自己的接入仍然离不开：
-
-- Graph
-- 发布图
-- 物化任务
-- 启动计划
-
-那就说明还停留在旧心智里，应该继续收缩到“任务为中心”。
